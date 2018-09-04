@@ -174,16 +174,29 @@ instance Num (Term ctx IntT) where
 pattern (:@) :: Term ctx (t1 :-> t2) -> Term ctx t1 -> Term ctx t2
 pattern x :@ y = TmApp x y
 
--- | A helper function for constructing lambda terms
-λ :: KnownRepr TypeRepr t1 => String -> Term (ctx ::> t1) t2 -> Term ctx (t1 :-> t2)
+
+
+-- # Some Syntactic Sugar
+
+λ ::
+  KnownRepr TypeRepr t1 =>
+  String ->
+  Term (ctx ::> t1) t2 ->
+  Term ctx (t1 :-> t2)
 λ nm x = TmAbs nm knownRepr x
 
--- | A helper function for constructing fixpoint terms
-μ :: KnownRepr TypeRepr t => String -> Term (ctx ::> t) t -> Term ctx t
+μ ::
+  KnownRepr TypeRepr t =>
+  String ->
+  Term (ctx ::> t) t ->
+  Term ctx t
 μ nm x = TmFix nm knownRepr x
 
--- | A pattern for variables.  This is intended to be used with explicit
---   type applications, e.g. @Var \@2@.
+
+-- # Syntactic Sugar
+
+--  Variables, intended to be used with explicit
+--  type applications, e.g. Var @2.
 pattern Var :: forall n ctx t. Idx n ctx t => Term ctx t
 pattern Var <- TmVar (testEquality (natIndex @n) -> Just Refl)
  where Var = TmVar (natIndex @n)
@@ -191,45 +204,55 @@ pattern Var <- TmVar (testEquality (natIndex @n) -> Just Refl)
 pattern (:<=) :: Term ctx IntT -> Term ctx IntT -> Term ctx BoolT
 pattern x :<= y = TmLe x y
 
--- | A simple pretty printer for terms.
+
+-- # Printing Expressions
 printTerm :: Assignment (Const (Int -> ShowS)) ctx
           -> Int
           -> Term ctx t
           -> ShowS
-printTerm pvar prec tm = case tm of
-  TmVar i -> getConst (pvar!i) prec
-  TmWeak x -> printTerm (Ctx.init pvar) prec x
-  TmInt n -> shows n
-  TmBool b -> shows b
-  TmLe x y -> showParen (prec > 6) (printTerm pvar 7 x . showString " <= " . printTerm pvar 7 y)
-  TmAdd x y -> showParen (prec > 5) (printTerm pvar 6 x . showString " + " . printTerm pvar 6 y)
-  TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm pvar 11 x)
-  TmIte c x y -> showParen (prec > 3) $
-                 showString "if " . printTerm pvar 0 c .
-                 showString " then " . printTerm pvar 4 x .
-                 showString " else " . printTerm pvar 4 y
-  TmApp x y -> showParen (prec > 10) (printTerm pvar 10 x) . showString " " . printTerm pvar 11 y
-  TmFix nm tp x ->
-    let nm' = if Prelude.null nm then "v" else nm
-        vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
-    showParen (prec > 0) $
-      showString "μ " . vnm 0 .
-      showString " : " . showsPrec 0 tp .
-      showString ". " . printTerm (pvar :> Const vnm) 0 x
-  TmAbs nm tp x ->
-    let nm' = if Prelude.null nm then "v" else nm
-        vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
-    showParen (prec > 0) $
-      showString "λ " . vnm 0 .
-      showString " : " . showsPrec 0 tp .
-      showString ". " . printTerm (pvar :> Const vnm) 0 x
+printTerm pvar prec tm =
+  case tm of
+    TmVar i -> getConst (pvar!i) prec
+    TmWeak x -> printTerm (Ctx.init pvar) prec x
+    TmInt n -> shows n
+    TmBool b -> shows b
+    TmLe x y -> showParen (prec > 6) (printTerm pvar 7 x . showString " <= " . printTerm pvar 7 y)
+    TmAdd x y -> showParen (prec > 5) (printTerm pvar 6 x . showString " + " . printTerm pvar 6 y)
+    TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm pvar 11 x)
+    TmIte c x y -> showParen (prec > 3) $
+                   showString "if " . printTerm pvar 0 c .
+                   showString " then " . printTerm pvar 4 x .
+                   showString " else " . printTerm pvar 4 y
+    TmApp x y -> showParen (prec > 10) (printTerm pvar 10 x) . showString " " . printTerm pvar 11 y
+    TmFix nm tp x ->
+      let nm' = if Prelude.null nm then "v" else nm
+          vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
+      showParen (prec > 0) $
+        showString "μ " . vnm 0 .
+        showString " : " . showsPrec 0 tp .
+        showString ". " . printTerm (pvar :> Const vnm) 0 x
+    TmAbs nm tp x ->
+      let nm' = if Prelude.null nm then "v" else nm
+          vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
+      showParen (prec > 0) $
+        showString "λ " . vnm 0 .
+        showString " : " . showsPrec 0 tp .
+        showString ". " . printTerm (pvar :> Const vnm) 0 x
+
+-- >>> :set -XDataKinds -XTypeApplications -XPartialTypeSignatures -Wno-partial-type-signatures
+-- >>> :module +Data.Parameterized.Context
+-- >>> printTerm empty 0 (λ "x" (Var @ 0 :: Term _ 'BoolT)) ""
+
+
+
+-- # Showing Terms
 
 instance KnownContext ctx => Show (Term ctx t) where
   showsPrec = printTerm (generate knownSize (\i -> Const (\_ -> shows (indexVal i))))
 
+
+-- # Computing Types
 
--- | Given an assignment of (run-time) types for the free variables, compute the
---   (run-time) type of a term.
 computeType ::
   Assignment TypeRepr ctx ->
   Term ctx t ->
@@ -249,18 +272,20 @@ computeType env tm = case tm of
     let t2 = computeType (env :> t1) x in ArrowRepr t1 t2
   TmFix _ t _ -> t
 
--- | A generic representation of values.  A value for this calculus
---   is either a basic value of one of the base types (Int or Bool)
---   or a lambda abstraction.  Values for lambda abstractions consist
---   of a closure and a term body.
---
---   The sorts of values contained in the
---   closure are controlled by the type parameter @f@; this varies depending
---   on the evaluation strategy.
+
+-- # Values
+
+-- The parameter f controls the values pointed to by variables in
+-- closures, and will change based on evaluation strategy.
+
 data Value (f :: Type -> *) (t :: Type) :: * where
   VInt   :: Int -> Value f IntT
   VBool  :: Bool -> Value f BoolT
-  VAbs   :: Assignment f ctx -> TypeRepr t1 -> Term (ctx ::> t1) t2 -> Value f (t1 :-> t2)
+  VAbs   :: Assignment f ctx ->
+            TypeRepr t1 ->
+            Term (ctx ::> t1) t2 ->
+            Value f (t1 :-> t2)
+
 
 instance ShowFC Value where
   showsPrecFC _sh _prec (VInt n) = shows n
