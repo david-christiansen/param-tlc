@@ -277,7 +277,10 @@ fact = TmFix "fact" (ArrowT IntT IntT) (TmAbs "x" IntT factBody)
 -- >>> checkTerm fact
 
 
--- {{{Next: Evaluator|||(lambda (_) (find-file "TypeCheck.hs"))}}}
+
+-- # Next Step
+
+-- Evaluating expressions, taking types into account
 
 
 

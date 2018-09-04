@@ -187,7 +187,11 @@ eval tm =
 -- 2. Add integer division, catching division by
 --    zero.
 
--- {{{Next: STLC|||(lambda (_) (find-file "AST.hs"))}}}
+-- ## Next Step
+
+-- The Simply Typed λ-Calculus, illustrating
+-- variable binding, type checking, and evaluation
+
 
 
 

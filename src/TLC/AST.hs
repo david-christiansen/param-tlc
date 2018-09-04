@@ -335,7 +335,10 @@ instance ShowF f => ShowF (Value f)
 instance ShowF f => Show (Value f t) where
   show = showFC showF
 
--- {{{Next: Type Checker|||(lambda (_) (find-file "TypeCheck.hs"))}}}
+
+-- # Next Step
+
+-- Writing a type checker
 
 
 
