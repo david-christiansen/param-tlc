@@ -47,28 +47,28 @@ import TLC.AST
 -- Substitution and full-β evaluation
 --
 
--- | A @Subst@ assigns to each free variable in @γ₂@
---   a term with free variables in @γ₁@.
-type Subst γ₁ γ₂  = Assignment (Term γ₁) γ₂
+-- | A @Subst@ assigns to each free variable in @ctx2@
+--   a term with free variables in @ctx1@.
+type Subst ctx1 ctx2  = Assignment (Term ctx1) ctx2
 
 -- | This is a utility operation that extends a
 --   substitution with a fresh variable that will
 --   be unchanged.
 extend_sub ::
-  Size γ₁ ->
-  Subst γ₁ γ₂ ->
-  Subst (γ₁ ::> τ) (γ₂ ::> τ)
+  Size ctx1 ->
+  Subst ctx1 ctx2 ->
+  Subst (ctx1 ::> t) (ctx2 ::> t)
 extend_sub sz sub =
   fmapFC TmWeak sub :> TmVar (nextIndex sz)
 
 -- | Given a substition and a term, apply the substituion to
 --   all the free variables in the term.
 subst ::
-  Size γ₁ ->
-  Subst γ₁ γ₂ ->
-  Term γ₂ τ -> Term γ₁ τ
+  Size ctx1 ->
+  Subst ctx1 ctx2 ->
+  Term ctx2 t -> Term ctx1 t
 subst sz sub tm = case tm of
-  TmVar i     -> sub!i
+  TmVar i     -> sub ! i
   TmWeak x    -> subst sz (Ctx.init sub) x
   TmBool b    -> TmBool b
   TmInt n     -> TmInt n
@@ -77,20 +77,20 @@ subst sz sub tm = case tm of
   TmNeg x     -> TmNeg (subst sz sub x)
   TmIte c x y -> TmIte (subst sz sub c) (subst sz sub x) (subst sz sub y)
   TmApp x y   -> TmApp (subst sz sub x) (subst sz sub y)
-  TmAbs nm τ x -> TmAbs nm τ (subst (incSize sz) (extend_sub sz sub) x)
-  TmFix nm τ x -> TmFix nm τ (subst (incSize sz) (extend_sub sz sub) x)
+  TmAbs nm t x -> TmAbs nm t (subst (incSize sz) (extend_sub sz sub) x)
+  TmFix nm t x -> TmFix nm t (subst (incSize sz) (extend_sub sz sub) x)
 
 -- | Substitute a term for a single open variable, leaving all other
 --   variables unchanged.
 singleSubst ::
-  Size γ ->
-  Term γ τ          {- ^ The term to substitute -} ->
-  Term (γ ::> τ) τ' {- ^ The term being substituted into -} ->
-  Term γ τ'
+  Size ctx ->
+  Term ctx t          {- ^ The term to substitute -} ->
+  Term (ctx ::> t) t' {- ^ The term being substituted into -} ->
+  Term ctx t'
 singleSubst sz tm body = subst sz (generate sz TmVar :> tm) body
 
 -- | Perform full-β normalization on a λ term.
-substEval :: Size γ -> Term γ τ -> Term γ τ
+substEval :: Size ctx -> Term ctx t -> Term ctx t
 substEval sz tm = case tm of
   TmVar i  -> TmVar i
   TmWeak x -> TmWeak (substEval (decSize sz) x)
@@ -108,7 +108,7 @@ substEval sz tm = case tm of
      case (substEval sz x, substEval sz y) of
        (TmInt a, TmInt b) -> TmInt $! a + b
        (x',y') -> TmAdd x' y'
-  TmAbs nm τ x  -> TmAbs nm τ (substEval (incSize sz) x)
+  TmAbs nm t x  -> TmAbs nm t (substEval (incSize sz) x)
   TmIte c x y ->
      case substEval sz c of
        TmBool True  -> substEval sz x
@@ -127,19 +127,19 @@ substEval sz tm = case tm of
 -- | Tie the knot directly through the @Value@ type.
 --   This corresponds directly to call-by-value
 --   evaluation.
-newtype CBV τ = CBV { unCBV :: Value CBV τ }
+newtype CBV t = CBV { unCBV :: Value CBV t }
 
 instance ShowF CBV
-instance Show (CBV τ) where
+instance Show (CBV t) where
   show (CBV x) = show x
 
 -- | Call-by-value evalaution.  Given an assignment of
---   values to the free variables in @γ@, evaluate the
+--   values to the free variables in @ctx@, evaluate the
 --   given term to a @Value@.
 cbvEval ::
-   Assignment CBV γ ->
-   Term γ τ ->
-   Value CBV τ
+   Assignment CBV ctx ->
+   Term ctx t ->
+   Value CBV t
 cbvEval env tm = case tm of
    TmVar i  -> unCBV (env!i)
    TmWeak x -> cbvEval (Ctx.init env) x
@@ -159,9 +159,9 @@ cbvEval env tm = case tm of
      case cbvEval env c of
        VBool True  -> cbvEval env x
        VBool False -> cbvEval env y
-   TmAbs _ τ x ->
+   TmAbs _ t x ->
      -- NB: here we capture the current evaluation environment as a closure
-     VAbs env τ x
+     VAbs env t x
    TmApp x y ->
      case cbvEval env x of
        VAbs env' _ body ->
@@ -179,21 +179,21 @@ cbvEval env tm = case tm of
 --   in the @ST@ monad, so that we can memoize the answers
 --   using @STRef@.  If our calculus had side-effects, we might
 --   instead embed it in some other monad (e.g. @IO@ or @StateT x (ST s)@).
-newtype Thunk s τ = Thunk (STRef s (ST s (CBN s τ)))
-type CBN s τ = Value (Thunk s) τ
+newtype Thunk s t = Thunk (STRef s (ST s (CBN s t)))
+type CBN s t = Value (Thunk s) t
 
-instance Show (Thunk s τ) where
+instance Show (Thunk s t) where
   show _ = "<thunk>"
 instance ShowF (Thunk s)
 
 -- | Given a computation that computes a value,
 --   produce a thunk that delays the relevant computation.
-delay :: ST s (CBN s τ) -> ST s (Thunk s τ)
+delay :: ST s (CBN s t) -> ST s (Thunk s t)
 delay x = Thunk <$> newSTRef x
 
 -- | Given a delayed evalation thunk, force and
 --   memoize its value.
-force :: Thunk s τ -> ST s (CBN s τ)
+force :: Thunk s t -> ST s (CBN s t)
 force (Thunk ref) =
    do x <- readSTRef ref
       val <- x
@@ -201,11 +201,11 @@ force (Thunk ref) =
       return val
 
 -- | Given an assigment of evaluation thunks to the free variables
---   in @γ@, compute the call-by-need evalaution of the given term.
+--   in @ctx@, compute the call-by-need evalaution of the given term.
 cbnEval ::
-   Assignment (Thunk s) γ ->
-   Term γ τ ->
-   ST s (CBN s τ)
+   Assignment (Thunk s) ctx ->
+   Term ctx t ->
+   ST s (CBN s t)
 cbnEval env tm = case tm of
    TmVar i ->
         force (env!i)
@@ -229,8 +229,8 @@ cbnEval env tm = case tm of
    TmIte c x y ->
      do VBool c' <- cbnEval env c
         if c' then cbnEval env x else cbnEval env y
-   TmAbs _ τ x ->
-        return $ VAbs env τ x
+   TmAbs _ t x ->
+        return $ VAbs env t x
    TmApp x y ->
      do VAbs env' _ body <- cbnEval env x
         y' <- delay (cbnEval env y)

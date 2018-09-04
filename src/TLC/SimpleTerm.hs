@@ -1,3 +1,4 @@
+-- {hide}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
@@ -10,6 +11,7 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -30,25 +32,40 @@
 -- GADTs, data kinds, type representatives, and typed evaluation.
 -------------------------------------------------------------------
 
+-- {show}
+-- # Singletons and Typed Expressions
+
+-- • GADTs allow us to represent only well-typed expressions
+
+-- • Singletons allow compile-time types to have unique
+--   run-time representatives
+
 module TLC.SimpleTerm where
+
+
+-- # Singletons and Typed Expressions
 
 import Data.Parameterized.Classes
 
--- | This data declaration is used as a 'DataKind'.
---   It is promoted to a kind, so that the constructors
---   can be used as indices to GADT.
+-- This is intended for use as a data kind.
+
 data Type = BoolT | IntT
 
--- | The 'TypeRepr' family is a run-time representation of the
---   data kind 'Type' it allows us to do runtime tests and computation
---   on 'Type'.  The shape of the data constructors exactly mirror
---   the shape of the data kind 'Type'.
+-- When a run-time representative is needed,
+-- use this data type whose structure precisely
+-- mirrors Type.
+
 data TypeRepr :: Type -> * where
   BoolRepr  :: TypeRepr BoolT
   IntRepr   :: TypeRepr IntT
 
+-- >>> :t BoolT
+-- >>> :t BoolRepr
 
-instance Show (TypeRepr τ) where
+
+-- # Useful Instances
+
+instance Show (TypeRepr t) where
   showsPrec _ IntRepr  = showString "IntT"
   showsPrec _ BoolRepr = showString "BoolT"
 
@@ -62,73 +79,136 @@ instance TestEquality TypeRepr where
   testEquality IntRepr  IntRepr  = return Refl
   testEquality _ _ = Nothing
 
+
+-- # Terms
 
--- | This is the main term represntation for our simple calculator language.
---   The parameter 'τ' is the result type of the term.
-data Term (τ :: Type) :: * where
+-- The parameter 't' is the result type of the term.
+data Term (t :: Type) :: * where
   TmInt  :: Int -> Term IntT
   TmLe   :: Term IntT -> Term IntT -> Term BoolT
   TmAdd  :: Term IntT -> Term IntT -> Term IntT
   TmNeg  :: Term IntT -> Term IntT
   TmBool :: Bool -> Term BoolT
-  TmIte  :: forall α. Term BoolT -> Term α -> Term α -> Term α
+  TmIte  :: forall a. Term BoolT -> Term a -> Term a -> Term a
 
--- | A simple pretty printer for terms.
+deriving instance Show (Term a)
+
+-- >>> TmIte (TmLe (TmInt 2) (TmInt 5)) (TmBool True) (TmBool False)
+
+
+-- # Printing Terms
+
 printTerm :: Int
-          -> Term τ
+          -> Term t
           -> ShowS
-printTerm prec tm = case tm of
-  TmInt n -> shows n
-  TmBool b -> shows b
-  TmLe x y -> showParen (prec > 6) (printTerm 7 x . showString " <= " . printTerm 7 y)
-  TmAdd x y -> showParen (prec > 5) (printTerm 6 x . showString " + " . printTerm 6 y)
-  TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm 11 x)
-  TmIte c x y -> showParen (prec > 3) $
-                 showString "if " . printTerm 0 c .
-                 showString " then " . printTerm 4 x .
-                 showString " else " . printTerm 4 y
+printTerm prec tm =
+  case tm of
+    TmInt n -> shows n
+    TmBool b -> shows b
+    TmLe x y -> showParen (prec > 6) (printTerm 7 x . showString " <= " . printTerm 7 y)
+    TmAdd x y -> showParen (prec > 5) (printTerm 6 x . showString " + " . printTerm 6 y)
+    TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm 11 x)
+    TmIte c x y -> showParen (prec > 3) $
+                   showString "if " . printTerm 0 c .
+                   showString " then " . printTerm 4 x .
+                   showString " else " . printTerm 4 y
+
+-- >>> let tm = TmIte (TmLe (TmInt 2) (TmInt 5)) (TmBool True) (TmBool False)
+-- >>> printTerm 0 tm ""
 
 
--- | Compute the (run-time) type of a term.
-computeType :: Term τ -> TypeRepr τ
-computeType tm = case tm of
-  TmInt _ -> IntRepr
-  TmBool _ -> BoolRepr
-  TmLe _ _ -> BoolRepr
-  TmAdd _ _ -> IntRepr
-  TmNeg _ -> IntRepr
-  TmIte _ x _ -> computeType x
+
+-- # Finding types
 
+-- A TypeRepr is a run-time representative of a compile-time Type.
 
--- | A generic representation of values.  A value for this calculus
---   is either a basic value of one of the base types (Int or Bool).
-data Value (τ :: Type) :: * where
+computeType :: Term t -> TypeRepr t
+computeType tm =
+  case tm of
+    TmInt _ -> IntRepr
+    TmBool _ -> BoolRepr
+    TmLe _ _ -> BoolRepr
+    TmAdd _ _ -> IntRepr
+    TmNeg _ -> IntRepr
+    TmIte _ x _ -> computeType x
+
+-- >>> let tm = TmIte (TmLe (TmInt 2) (TmInt 5)) (TmBool True) (TmBool False)
+-- >>> computeType tm
+
+
+-- # Values
+
+data Value (t :: Type) :: * where
   VInt   :: Int -> Value IntT
   VBool  :: Bool -> Value BoolT
 
 instance ShowF Value
-instance Show (Value τ) where
+instance Show (Value t) where
   show (VInt i) = show i
   show (VBool b) = show b
 
+
+-- # Evaluation
 
+-- GHC knows that these pattern matches are exhaustive.
 
--- | Reduce a term expression to a value
-eval :: Term τ -> Value τ
-eval tm = case tm of
-   TmBool b -> VBool b
-   TmInt n  -> VInt n
-   TmLe x y ->
-     case (eval x, eval y) of
-       -- NB! GHC knows that this is the only possibility!
-       (VInt a, VInt b) -> VBool $! a <= b
-   TmAdd x y ->
-     case (eval x, eval y) of
-       (VInt a, VInt b) -> VInt $! a + b
-   TmNeg x ->
-      case eval x of
-        VInt a -> VInt $! negate a
-   TmIte c x y ->
-     case eval c of
-       VBool True  -> eval x
-       VBool False -> eval y
+eval :: Term t -> Value t
+eval tm =
+  case tm of
+    TmBool b -> VBool b
+    TmInt n  -> VInt n
+    TmLe x y ->
+      case (eval x, eval y) of
+        (VInt a, VInt b) -> VBool $! a <= b
+    TmAdd x y ->
+      case (eval x, eval y) of
+        (VInt a, VInt b) -> VInt $! a + b
+    TmNeg x ->
+       case eval x of
+         VInt a -> VInt $! negate a
+    TmIte c x y ->
+      case eval c of
+        VBool True  -> eval x
+        VBool False -> eval y
+
+-- >>> let tm1 = TmIte (TmLe (TmInt 2) (TmInt 5)) (TmBool True) (TmBool False)
+-- >>> eval tm1
+-- >>> let tm2 = TmIte (TmLe (TmInt 2) (TmInt 5)) (TmInt 2) (TmInt 5)
+-- >>> eval tm2
+
+
+-- # Exercises
+
+-- 0. Add multiplication
+
+-- 1. Add strings to the language, with literals,
+--    concatenation, and lexicographic ordering.
+
+-- 2. Add integer division, catching division by
+--    zero.
+
+
+
+-- {hide}
+-- Local Variables:
+-- eval: (eldoc-mode -1)
+-- eval: (display-line-numbers-mode -1)
+-- eval: (flycheck-mode 1)
+-- eval: (make-variable-buffer-local 'face-remapping-alist)
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-title-face (:height 2.0
+--                                                                        :slant normal
+--                                                                        :foreground "black" :family "Overpass Heavy" :weight bold)))
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-subtitle-face (:height 1.5
+--                                                                           :slant normal
+--                                                                           :foreground "black" :family "Overpass Heavy" :weight semibold)))
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-subsubtitle-face (:height 1.3
+--                                                                              :slant normal
+--                                                                              :foreground "black" :family "Overpass Heavy")))
+-- eval: (add-to-list 'face-remapping-alist
+--                    '(live-code-talks-comment-face (:slant normal
+--                                                    :foreground "black"
+--                                                    :family "Overpass")))
+-- eval: (add-to-list 'face-remapping-alist
+--                    '(idris-loaded-region-face (:background nil)))
+-- End:
+-- {show}

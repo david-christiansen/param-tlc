@@ -79,10 +79,10 @@ typeToRepr (ArrowT x y) =
     (Some x', Some y') -> Some (AST.ArrowRepr x' y')
 
 -- | The result of a typechecking operation in the context
---   of free variable context @γ@ is a 'AST.TypeRepr' and
+--   of free variable context @ctx@ is a 'AST.TypeRepr' and
 --   a term of that type.
-data TCResult (γ :: Ctx AST.Type) where
-  TCResult :: AST.TypeRepr τ -> AST.Term γ τ -> TCResult γ
+data TCResult (ctx :: Ctx AST.Type) where
+  TCResult :: AST.TypeRepr t -> AST.Term ctx t -> TCResult ctx
 
 -- | Given an untyped list of free variable names and a
 --   strongly-typed free variable context, check that the
@@ -101,9 +101,9 @@ data TCResult (γ :: Ctx AST.Type) where
 
 verifyTyping ::
    [String] {-^ Scope information about the free variable names in stack order (nearest enclosing binder nearest to the front of the list) -} ->
-   Assignment AST.TypeRepr γ {-^ Typed scope information corresponding to the above -} ->
+   Assignment AST.TypeRepr ctx {-^ Typed scope information corresponding to the above -} ->
    Term {-^ A term to check -} ->
-   Except String (TCResult γ)
+   Except String (TCResult ctx)
 verifyTyping scope env tm = case tm of
    TmVar nm ->
      case elemIndex nm scope of

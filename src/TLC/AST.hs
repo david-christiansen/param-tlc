@@ -1,3 +1,5 @@
+-- {hide}
+
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
@@ -33,21 +35,45 @@
 -- required to successfully work in this atmosphere of rich types.
 -- Special data structures, generalizations of existing programming
 -- patterns and programming techniques are often required; many of
--- these useful patterns and utilites have been captuered in the
+-- these useful patterns and utilities have been captured in the
 -- 'parameterized-utils' package.  This module demonstrates the
 -- use of quite a few of these.
 -------------------------------------------------------------------
+
+-- {show}
+-- # Simply-Typed λ-Calculus
+
+-- • Programming with rich types requires new techniques
+--   and generalizations of old ones.
+
+-- • Galois developed the parameterized-utils library to
+--   collect these useful patterns and utilities.
+
 module TLC.AST where
 
+
+-- # Useful Imports
+
+-- The constant functor
 import Data.Functor.Const
 
+-- Generalizations of common type classes at higher kinds
 import Data.Parameterized.Classes
+
+-- Type-level lists and run-time lists indexed by them
 import Data.Parameterized.Context as Ctx
+
+-- A version of Traversable generalized to higher kinds
 import Data.Parameterized.TraversableFC
 
--- | This data declaration is used as a 'DataKind'.
---   It is promoted to a kind, so that the constructors
---   can be used as indices to GADT.
+-- Quantified constraints in GHC 8.6 will render many of
+-- these classes redundant.
+
+
+-- # STLC types
+
+-- A data kind for λ-calculus types
+
 data Type where
   (:->) :: Type -> Type -> Type
   BoolT :: Type
@@ -55,16 +81,17 @@ data Type where
 
 infixr 5 :->
 
--- | The 'TypeRepr' family is a run-time representation of the
---   data kind 'Type' it allows us to do runtime tests and computation
---   on 'Type'.  The shape of the data constructors exactly mirror
---   the shape of the data kind 'Type'.
+
+-- A singleton for run-time witnesses of STLC types
 data TypeRepr :: Type -> * where
-  ArrowRepr :: TypeRepr τ₁ -> TypeRepr τ₂ -> TypeRepr (τ₁ :-> τ₂)
+  ArrowRepr :: TypeRepr t1 -> TypeRepr t2 -> TypeRepr (t1 :-> t2)
   BoolRepr  :: TypeRepr BoolT
   IntRepr   :: TypeRepr IntT
 
-instance Show (TypeRepr τ) where
+
+-- # Showing Types
+
+instance Show (TypeRepr t) where
   showsPrec _ IntRepr  = showString "IntT"
   showsPrec _ BoolRepr = showString "BoolT"
   showsPrec d (ArrowRepr x y) =
@@ -73,40 +100,69 @@ instance Show (TypeRepr τ) where
 
 instance ShowF TypeRepr
 
-instance KnownRepr TypeRepr IntT where knownRepr = IntRepr
-instance KnownRepr TypeRepr BoolT where knownRepr = BoolRepr
-instance (KnownRepr TypeRepr τ₁, KnownRepr TypeRepr τ₂) => KnownRepr TypeRepr (τ₁ :-> τ₂) where
-  knownRepr = ArrowRepr knownRepr knownRepr
+
+-- # Recovering a Witness for a Known Type
+
+instance KnownRepr TypeRepr IntT where
+  knownRepr = IntRepr
+
+instance KnownRepr TypeRepr BoolT where
+  knownRepr = BoolRepr
+instance (KnownRepr TypeRepr t1, KnownRepr TypeRepr t2) =>
+         KnownRepr TypeRepr (t1 :-> t2)
+  where
+    knownRepr = ArrowRepr knownRepr knownRepr
+
+
+-- # Equality of STLC Types
 
 instance TestEquality TypeRepr where
   testEquality BoolRepr BoolRepr = return Refl
   testEquality IntRepr  IntRepr  = return Refl
-  testEquality (ArrowRepr x₁ x₂) (ArrowRepr y₁ y₂) =
-    do Refl <- testEquality x₁ y₁
-       Refl <- testEquality x₂ y₂
+  testEquality (ArrowRepr x1 x2) (ArrowRepr y1 y2) =
+    do Refl <- testEquality x1 y1
+       Refl <- testEquality x2 y2
        return Refl
   testEquality _ _ = Nothing
 
--- | This is the main term representation for our STLC.  It is explicitly
---   a representation of "open" terms.  The 'Term' type has two parameters.
---   The first 'γ', is a context that fixes the types of the free variables
---   occuring in the term.  The second 'τ', is the result type of the term.
-data Term (γ :: Ctx Type) (τ :: Type) :: * where
-  TmVar  :: Index γ τ -> Term γ τ
-  TmWeak :: Term γ τ -> Term (γ ::> τ') τ
-  TmInt  :: Int -> Term γ IntT
-  TmLe   :: Term γ IntT -> Term γ IntT -> Term γ BoolT
-  TmAdd  :: Term γ IntT -> Term γ IntT -> Term γ IntT
-  TmNeg  :: Term γ IntT -> Term γ IntT
-  TmBool :: Bool -> Term γ BoolT
-  TmIte  :: Term γ BoolT -> Term γ τ -> Term γ τ -> Term γ τ
-  TmApp  :: Term γ (τ₁ :-> τ₂) -> Term γ τ₁ -> Term γ τ₂
-  TmAbs  :: String -> TypeRepr τ₁ -> Term (γ ::> τ₁) τ₂ -> Term γ (τ₁ :-> τ₂)
-  TmFix  :: String -> TypeRepr τ  -> Term (γ ::> τ)  τ  -> Term γ τ
+-- >>> :t testEquality BoolRepr BoolRepr
+
+
+-- # STLC Terms
+
+-- Parameters to Term:
+
+-- • ctx gives the types of free variables that may occur
+
+-- • t gives the term's type
+
+data Term (ctx :: Ctx Type) (t :: Type) :: * where
+  TmVar  :: Index ctx t -> Term ctx t
+  TmWeak :: Term ctx t -> Term (ctx ::> t') t
+  TmInt  :: Int -> Term ctx IntT
+  TmLe   :: Term ctx IntT -> Term ctx IntT -> Term ctx BoolT
+  TmAdd  :: Term ctx IntT -> Term ctx IntT -> Term ctx IntT
+  TmNeg  :: Term ctx IntT -> Term ctx IntT
+  TmBool :: Bool -> Term ctx BoolT
+  TmIte  :: Term ctx BoolT -> Term ctx t -> Term ctx t -> Term ctx t
+  TmApp  :: Term ctx (t1 :-> t2) -> Term ctx t1 -> Term ctx t2
+  TmAbs  :: String -> TypeRepr t1 -> Term (ctx ::> t1) t2 -> Term ctx (t1 :-> t2)
+  TmFix  :: String -> TypeRepr t  -> Term (ctx ::> t)  t  -> Term ctx t
+
+-- >>> :t TmAdd (TmInt 3) (TmInt 2)
+-- TmAdd (TmInt 3) (TmInt 2) :: Term ctx 'IntT
+-- >>> :t TmAdd (TmInt 2) (TmVar 0)
+-- TmAdd (TmInt 2) (TmVar 0)
+--   :: Num (Data.Parameterized.Context.Unsafe.Index ctx 'IntT) =>
+--      Term ctx 'IntT
+
+
+
+-- # Some Syntactic Sugar
 
 infixl 5 :@
 
-instance Num (Term γ IntT) where
+instance Num (Term ctx IntT) where
   fromInteger n = TmInt (fromInteger n)
   x + y = TmAdd x y
   negate (TmInt x) = TmInt (negate x)
@@ -115,30 +171,30 @@ instance Num (Term γ IntT) where
   abs = error "Abs not defined"
   signum = error "signum not defined"
 
-pattern (:@) :: Term γ (τ₁ :-> τ₂) -> Term γ τ₁ -> Term γ τ₂
+pattern (:@) :: Term ctx (t1 :-> t2) -> Term ctx t1 -> Term ctx t2
 pattern x :@ y = TmApp x y
 
 -- | A helper function for constructing lambda terms
-λ :: KnownRepr TypeRepr τ₁ => String -> Term (γ ::> τ₁) τ₂ -> Term γ (τ₁ :-> τ₂)
+λ :: KnownRepr TypeRepr t1 => String -> Term (ctx ::> t1) t2 -> Term ctx (t1 :-> t2)
 λ nm x = TmAbs nm knownRepr x
 
 -- | A helper function for constructing fixpoint terms
-μ :: KnownRepr TypeRepr τ => String -> Term (γ ::> τ) τ -> Term γ τ
+μ :: KnownRepr TypeRepr t => String -> Term (ctx ::> t) t -> Term ctx t
 μ nm x = TmFix nm knownRepr x
 
 -- | A pattern for variables.  This is intended to be used with explicit
 --   type applications, e.g. @Var \@2@.
-pattern Var :: forall n γ τ. Idx n γ τ => Term γ τ
+pattern Var :: forall n ctx t. Idx n ctx t => Term ctx t
 pattern Var <- TmVar (testEquality (natIndex @n) -> Just Refl)
  where Var = TmVar (natIndex @n)
 
-pattern (:<=) :: Term γ IntT -> Term γ IntT -> Term γ BoolT
+pattern (:<=) :: Term ctx IntT -> Term ctx IntT -> Term ctx BoolT
 pattern x :<= y = TmLe x y
 
 -- | A simple pretty printer for terms.
-printTerm :: Assignment (Const (Int -> ShowS)) γ
+printTerm :: Assignment (Const (Int -> ShowS)) ctx
           -> Int
-          -> Term γ τ
+          -> Term ctx t
           -> ShowS
 printTerm pvar prec tm = case tm of
   TmVar i -> getConst (pvar!i) prec
@@ -168,16 +224,16 @@ printTerm pvar prec tm = case tm of
       showString " : " . showsPrec 0 tp .
       showString ". " . printTerm (pvar :> Const vnm) 0 x
 
-instance KnownContext γ => Show (Term γ τ) where
+instance KnownContext ctx => Show (Term ctx t) where
   showsPrec = printTerm (generate knownSize (\i -> Const (\_ -> shows (indexVal i))))
 
 
 -- | Given an assignment of (run-time) types for the free variables, compute the
 --   (run-time) type of a term.
 computeType ::
-  Assignment TypeRepr γ ->
-  Term γ τ ->
-  TypeRepr τ
+  Assignment TypeRepr ctx ->
+  Term ctx t ->
+  TypeRepr t
 computeType env tm = case tm of
   TmVar i -> env!i
   TmWeak x -> computeType (Ctx.init env) x
@@ -188,10 +244,10 @@ computeType env tm = case tm of
   TmNeg _ -> IntRepr
   TmIte _ x _ -> computeType env x
   TmApp x y ->
-    case computeType env x of ArrowRepr _ τ -> τ
-  TmAbs _ τ₁ x ->
-    let τ₂ = computeType (env :> τ₁) x in ArrowRepr τ₁ τ₂
-  TmFix _ τ _ -> τ
+    case computeType env x of ArrowRepr _ t -> t
+  TmAbs _ t1 x ->
+    let t2 = computeType (env :> t1) x in ArrowRepr t1 t2
+  TmFix _ t _ -> t
 
 -- | A generic representation of values.  A value for this calculus
 --   is either a basic value of one of the base types (Int or Bool)
@@ -201,16 +257,42 @@ computeType env tm = case tm of
 --   The sorts of values contained in the
 --   closure are controlled by the type parameter @f@; this varies depending
 --   on the evaluation strategy.
-data Value (f :: Type -> *) (τ :: Type) :: * where
+data Value (f :: Type -> *) (t :: Type) :: * where
   VInt   :: Int -> Value f IntT
   VBool  :: Bool -> Value f BoolT
-  VAbs   :: Assignment f γ -> TypeRepr τ₁ -> Term (γ ::> τ₁) τ₂ -> Value f (τ₁ :-> τ₂)
+  VAbs   :: Assignment f ctx -> TypeRepr t1 -> Term (ctx ::> t1) t2 -> Value f (t1 :-> t2)
 
 instance ShowFC Value where
   showsPrecFC _sh _prec (VInt n) = shows n
   showsPrecFC _sh _prec (VBool b) = shows b
-  showsPrecFC sh prec (VAbs env τ tm) =
-     printTerm (fmapFC (\x -> Const (\p -> sh p x)) env) prec (TmAbs [] τ tm)
+  showsPrecFC sh prec (VAbs env t tm) =
+     printTerm (fmapFC (\x -> Const (\p -> sh p x)) env) prec (TmAbs [] t tm)
 instance ShowF f => ShowF (Value f)
-instance ShowF f => Show (Value f τ) where
+instance ShowF f => Show (Value f t) where
   show = showFC showF
+
+
+
+-- {hide}
+-- Local Variables:
+-- eval: (eldoc-mode -1)
+-- eval: (display-line-numbers-mode -1)
+-- eval: (flycheck-mode 1)
+-- eval: (make-variable-buffer-local 'face-remapping-alist)
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-title-face (:height 2.0
+--                                                                        :slant normal
+--                                                                        :foreground "black" :family "Overpass Heavy" :weight bold)))
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-subtitle-face (:height 1.5
+--                                                                           :slant normal
+--                                                                           :foreground "black" :family "Overpass Heavy" :weight semibold)))
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-subsubtitle-face (:height 1.3
+--                                                                              :slant normal
+--                                                                              :foreground "black" :family "Overpass Heavy")))
+-- eval: (add-to-list 'face-remapping-alist
+--                    '(live-code-talks-comment-face (:slant normal
+--                                                    :foreground "black"
+--                                                    :family "Overpass")))
+-- eval: (add-to-list 'face-remapping-alist
+--                    '(idris-loaded-region-face (:background nil)))
+-- End:
+-- {show}
