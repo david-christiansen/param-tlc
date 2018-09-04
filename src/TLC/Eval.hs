@@ -67,18 +67,25 @@ subst ::
   Size γ₁ ->
   Subst γ₁ γ₂ ->
   Term γ₂ τ -> Term γ₁ τ
-subst sz sub tm = case tm of
-  TmVar i     -> sub!i
-  TmWeak x    -> subst sz (Ctx.init sub) x
-  TmBool b    -> TmBool b
-  TmInt n     -> TmInt n
-  TmLe x y    -> TmLe (subst sz sub x) (subst sz sub y)
-  TmAdd x y   -> TmAdd (subst sz sub x) (subst sz sub y)
-  TmNeg x     -> TmNeg (subst sz sub x)
-  TmIte c x y -> TmIte (subst sz sub c) (subst sz sub x) (subst sz sub y)
-  TmApp x y   -> TmApp (subst sz sub x) (subst sz sub y)
-  TmAbs nm τ x -> TmAbs nm τ (subst (incSize sz) (extend_sub sz sub) x)
-  TmFix nm τ x -> TmFix nm τ (subst (incSize sz) (extend_sub sz sub) x)
+subst sz sub tm =
+  case tm of
+    TmVar i     -> sub!i
+    TmWeak x    -> subst sz (Ctx.init sub) x
+    TmBool b    -> TmBool b
+    TmInt n     -> TmInt n
+    TmLe x y    -> TmLe (subst sz sub x) (subst sz sub y)
+    TmAdd x y   -> TmAdd (subst sz sub x) (subst sz sub y)
+    TmNeg x     -> TmNeg (subst sz sub x)
+    TmIte c x y -> TmIte (subst sz sub c) (subst sz sub x) (subst sz sub y)
+    TmApp x y   -> TmApp (subst sz sub x) (subst sz sub y)
+    TmAbs nm τ x -> TmAbs nm τ (subst (incSize sz) (extend_sub sz sub) x)
+    TmFix nm τ x -> TmFix nm τ (subst (incSize sz) (extend_sub sz sub) x)
+    TmInl b l -> TmInl b (subst sz sub l)
+    TmInr a r -> TmInr a (subst sz sub r)
+    TmCase tgt x l y r ->
+      TmCase (subst sz sub tgt)
+        x (subst (incSize sz) (extend_sub sz sub) l)
+        y (subst (incSize sz) (extend_sub sz sub) r)
 
 -- | Substitute a term for a single open variable, leaving all other
 --   variables unchanged.
@@ -91,35 +98,50 @@ singleSubst sz tm body = subst sz (generate sz TmVar :> tm) body
 
 -- | Perform full-β normalization on a λ term.
 substEval :: Size γ -> Term γ τ -> Term γ τ
-substEval sz tm = case tm of
-  TmVar i  -> TmVar i
-  TmWeak x -> TmWeak (substEval (decSize sz) x)
-  TmBool x -> TmBool x
-  TmInt n  -> TmInt n
-  TmLe x y ->
-     case (substEval sz x, substEval sz y) of
-       (TmInt a, TmInt b) -> TmBool $! a <= b
-       (x',y') -> TmLe x' y'
-  TmNeg x ->
-     case substEval sz x of
-       TmInt a -> TmInt $! negate a
-       x' -> TmNeg x'
-  TmAdd x y ->
-     case (substEval sz x, substEval sz y) of
-       (TmInt a, TmInt b) -> TmInt $! a + b
-       (x',y') -> TmAdd x' y'
-  TmAbs nm τ x  -> TmAbs nm τ (substEval (incSize sz) x)
-  TmIte c x y ->
-     case substEval sz c of
-       TmBool True  -> substEval sz x
-       TmBool False -> substEval sz y
-       c' -> TmIte c' x y
-  TmApp x y ->
-     case substEval sz x of
-       TmAbs _ _ body -> substEval sz (singleSubst sz y body)
-       x' -> TmApp x' y
-  TmFix _ _ x ->
-     substEval sz (singleSubst sz tm x)
+substEval sz tm =
+  case tm of
+    TmVar i  -> TmVar i
+    TmWeak x -> TmWeak (substEval (decSize sz) x)
+    TmBool x -> TmBool x
+    TmInt n  -> TmInt n
+    TmLe x y ->
+       case (substEval sz x, substEval sz y) of
+         (TmInt a, TmInt b) -> TmBool $! a <= b
+         (x',y') -> TmLe x' y'
+    TmNeg x ->
+       case substEval sz x of
+         TmInt a -> TmInt $! negate a
+         x' -> TmNeg x'
+    TmAdd x y ->
+       case (substEval sz x, substEval sz y) of
+         (TmInt a, TmInt b) -> TmInt $! a + b
+         (x',y') -> TmAdd x' y'
+    TmAbs nm τ x  -> TmAbs nm τ (substEval (incSize sz) x)
+    TmIte c x y ->
+       case substEval sz c of
+         TmBool True  -> substEval sz x
+         TmBool False -> substEval sz y
+         c' -> TmIte c' x y
+    TmApp x y ->
+       case substEval sz x of
+         TmAbs _ _ body -> substEval sz (singleSubst sz y body)
+         x' -> TmApp x' y
+    TmFix _ _ x ->
+       substEval sz (singleSubst sz tm x)
+    TmInl b l ->
+      TmInl b (substEval sz l)
+    TmInr a r ->
+      TmInr a (substEval sz r)
+    TmCase tgt x l y r ->
+      case substEval sz tgt of
+        TmInl _ e ->
+          substEval sz (singleSubst sz e l)
+        TmInr _ e ->
+          substEval sz (singleSubst sz e r)
+        tgt' ->
+          TmCase tgt'
+            x (substEval (incSize sz) l)
+            y (substEval (incSize sz) r)
 
 -------------------------------------------------
 -- Call by value evaluation
@@ -140,36 +162,47 @@ cbvEval ::
    Assignment CBV γ ->
    Term γ τ ->
    Value CBV τ
-cbvEval env tm = case tm of
-   TmVar i  -> unCBV (env!i)
-   TmWeak x -> cbvEval (Ctx.init env) x
-   TmBool b -> VBool b
-   TmInt n  -> VInt n
-   TmLe x y ->
-     case (cbvEval env x, cbvEval env y) of
-       -- NB! GHC knows that this is the only possibility!
-       (VInt a, VInt b) -> VBool $! a <= b
-   TmAdd x y ->
-     case (cbvEval env x, cbvEval env y) of
-       (VInt a, VInt b) -> VInt $! a + b
-   TmNeg x ->
+cbvEval env tm =
+  case tm of
+    TmVar i  -> unCBV (env!i)
+    TmWeak x -> cbvEval (Ctx.init env) x
+    TmBool b -> VBool b
+    TmInt n  -> VInt n
+    TmLe x y ->
+      case (cbvEval env x, cbvEval env y) of
+        -- NB! GHC knows that this is the only possibility!
+        (VInt a, VInt b) -> VBool $! a <= b
+    TmAdd x y ->
+      case (cbvEval env x, cbvEval env y) of
+        (VInt a, VInt b) -> VInt $! a + b
+    TmNeg x ->
+       case cbvEval env x of
+         VInt a -> VInt $! negate a
+    TmIte c x y ->
+      case cbvEval env c of
+        VBool True  -> cbvEval env x
+        VBool False -> cbvEval env y
+    TmAbs _ τ x ->
+      -- NB: here we capture the current evaluation environment as a closure
+      VAbs env τ x
+    TmApp x y ->
       case cbvEval env x of
-        VInt a -> VInt $! negate a
-   TmIte c x y ->
-     case cbvEval env c of
-       VBool True  -> cbvEval env x
-       VBool False -> cbvEval env y
-   TmAbs _ τ x ->
-     -- NB: here we capture the current evaluation environment as a closure
-     VAbs env τ x
-   TmApp x y ->
-     case cbvEval env x of
-       VAbs env' _ body ->
-         -- NB: we have to @seq@ this to force GHC to evaluate in CBV order
-         let y' = CBV (cbvEval env y) in
-         seq y' (cbvEval (env' :> y') body)
-   TmFix _ _ x ->
-     fix $ \x' -> cbvEval (env :> CBV x') x
+        VAbs env' _ body ->
+          -- NB: we have to @seq@ this to force GHC to evaluate in CBV order
+          let y' = CBV (cbvEval env y) in
+          seq y' (cbvEval (env' :> y') body)
+    TmFix _ _ x ->
+      fix $ \x' -> cbvEval (env :> CBV x') x
+    TmInl b e ->
+      VInl (cbvEval env e)
+    TmInr a e ->
+      VInr (cbvEval env e)
+    TmCase tgt x l y r ->
+      case cbvEval env tgt of
+        VInl v ->
+          cbvEval (env :> CBV v) l
+        VInr v ->
+          cbvEval (env :> CBV v) r
 
 -------------------------------------------------
 -- Call by need evaluation
@@ -206,36 +239,51 @@ cbnEval ::
    Assignment (Thunk s) γ ->
    Term γ τ ->
    ST s (CBN s τ)
-cbnEval env tm = case tm of
-   TmVar i ->
-        force (env!i)
-   TmWeak x ->
-        cbnEval (Ctx.init env) x
-   TmBool b ->
-        return $ VBool b
-   TmInt n ->
-        return $ VInt n
-   TmLe x y ->
-     do VInt a <- cbnEval env x
-        VInt b <- cbnEval env y
-        return . VBool $! a <= b
-   TmAdd x y ->
-     do VInt a <- cbnEval env x
-        VInt b <- cbnEval env y
-        return . VInt $! a + b
-   TmNeg x ->
-     do VInt a <- cbnEval env x
-        return . VInt $! negate a
-   TmIte c x y ->
-     do VBool c' <- cbnEval env c
-        if c' then cbnEval env x else cbnEval env y
-   TmAbs _ τ x ->
-        return $ VAbs env τ x
-   TmApp x y ->
-     do VAbs env' _ body <- cbnEval env x
-        y' <- delay (cbnEval env y)
-        cbnEval (env' :> y') body
-   TmFix _ _ x ->
-     mfix $ \result ->
-       do resultThunk <- delay (return result)
-          cbnEval (env :> resultThunk) x
+cbnEval env tm =
+  case tm of
+    TmVar i ->
+         force (env!i)
+    TmWeak x ->
+         cbnEval (Ctx.init env) x
+    TmBool b ->
+         return $ VBool b
+    TmInt n ->
+         return $ VInt n
+    TmLe x y ->
+      do VInt a <- cbnEval env x
+         VInt b <- cbnEval env y
+         return . VBool $! a <= b
+    TmAdd x y ->
+      do VInt a <- cbnEval env x
+         VInt b <- cbnEval env y
+         return . VInt $! a + b
+    TmNeg x ->
+      do VInt a <- cbnEval env x
+         return . VInt $! negate a
+    TmIte c x y ->
+      do VBool c' <- cbnEval env c
+         if c' then cbnEval env x else cbnEval env y
+    TmAbs _ τ x ->
+         return $ VAbs env τ x
+    TmApp x y ->
+      do VAbs env' _ body <- cbnEval env x
+         y' <- delay (cbnEval env y)
+         cbnEval (env' :> y') body
+    TmFix _ _ x ->
+      mfix $ \result ->
+        do resultThunk <- delay (return result)
+           cbnEval (env :> resultThunk) x
+    TmInl b e ->
+      VInl <$> cbnEval env e
+    TmInr a e ->
+      VInr <$> cbnEval env e
+    TmCase tgt x l y r ->
+      cbnEval env tgt >>=
+      \case
+        VInl v ->
+          do th <- delay (return v)
+             cbnEval (env :> th) l
+        VInr v ->
+          do th <- delay (return v)
+             cbnEval (env :> th) r
+

@@ -50,10 +50,12 @@ import Data.Parameterized.TraversableFC
 --   can be used as indices to GADT.
 data Type where
   (:->) :: Type -> Type -> Type
+  (:+:) :: Type -> Type -> Type
   BoolT :: Type
   IntT  :: Type
 
 infixr 5 :->
+infixl 7 :+:
 
 -- | The 'TypeRepr' family is a run-time representation of the
 --   data kind 'Type' it allows us to do runtime tests and computation
@@ -61,6 +63,7 @@ infixr 5 :->
 --   the shape of the data kind 'Type'.
 data TypeRepr :: Type -> * where
   ArrowRepr :: TypeRepr τ₁ -> TypeRepr τ₂ -> TypeRepr (τ₁ :-> τ₂)
+  SumRepr   :: TypeRepr t1 -> TypeRepr t2 -> TypeRepr (t1 :+: t2)
   BoolRepr  :: TypeRepr BoolT
   IntRepr   :: TypeRepr IntT
 
@@ -70,6 +73,9 @@ instance Show (TypeRepr τ) where
   showsPrec d (ArrowRepr x y) =
      showParen (d > 5) $
        showsPrec 6 x . showString " :-> " . showsPrec 5 y
+  showsPrec d (SumRepr t1 t2) =
+    showParen (d > 7) $
+      showsPrec 7 t1 . showString " :+: " . showsPrec 8 t2
 
 instance ShowF TypeRepr
 
@@ -84,6 +90,10 @@ instance TestEquality TypeRepr where
   testEquality (ArrowRepr x₁ x₂) (ArrowRepr y₁ y₂) =
     do Refl <- testEquality x₁ y₁
        Refl <- testEquality x₂ y₂
+       return Refl
+  testEquality (SumRepr a1 a2) (SumRepr b1 b2) =
+    do Refl <- testEquality a1 b1
+       Refl <- testEquality a2 b2
        return Refl
   testEquality _ _ = Nothing
 
@@ -103,6 +113,9 @@ data Term (γ :: Ctx Type) (τ :: Type) :: * where
   TmApp  :: Term γ (τ₁ :-> τ₂) -> Term γ τ₁ -> Term γ τ₂
   TmAbs  :: String -> TypeRepr τ₁ -> Term (γ ::> τ₁) τ₂ -> Term γ (τ₁ :-> τ₂)
   TmFix  :: String -> TypeRepr τ  -> Term (γ ::> τ)  τ  -> Term γ τ
+  TmInl  :: TypeRepr b -> Term γ a -> Term γ (a :+: b)
+  TmInr  :: TypeRepr a -> Term γ b -> Term γ (a :+: b)
+  TmCase :: Term γ (a :+: b) -> String -> Term (γ ::> a) c -> String -> Term (γ ::> b) c -> Term γ c
 
 infixl 5 :@
 
@@ -140,33 +153,52 @@ printTerm :: Assignment (Const (Int -> ShowS)) γ
           -> Int
           -> Term γ τ
           -> ShowS
-printTerm pvar prec tm = case tm of
-  TmVar i -> getConst (pvar!i) prec
-  TmWeak x -> printTerm (Ctx.init pvar) prec x
-  TmInt n -> shows n
-  TmBool b -> shows b
-  TmLe x y -> showParen (prec > 6) (printTerm pvar 7 x . showString " <= " . printTerm pvar 7 y)
-  TmAdd x y -> showParen (prec > 5) (printTerm pvar 6 x . showString " + " . printTerm pvar 6 y)
-  TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm pvar 11 x)
-  TmIte c x y -> showParen (prec > 3) $
-                 showString "if " . printTerm pvar 0 c .
-                 showString " then " . printTerm pvar 4 x .
-                 showString " else " . printTerm pvar 4 y
-  TmApp x y -> showParen (prec > 10) (printTerm pvar 10 x) . showString " " . printTerm pvar 11 y
-  TmFix nm tp x ->
-    let nm' = if Prelude.null nm then "v" else nm
-        vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
-    showParen (prec > 0) $
-      showString "μ " . vnm 0 .
-      showString " : " . showsPrec 0 tp .
-      showString ". " . printTerm (pvar :> Const vnm) 0 x
-  TmAbs nm tp x ->
-    let nm' = if Prelude.null nm then "v" else nm
-        vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
-    showParen (prec > 0) $
-      showString "λ " . vnm 0 .
-      showString " : " . showsPrec 0 tp .
-      showString ". " . printTerm (pvar :> Const vnm) 0 x
+printTerm pvar prec tm =
+  case tm of
+    TmVar i -> getConst (pvar!i) prec
+    TmWeak x -> printTerm (Ctx.init pvar) prec x
+    TmInt n -> shows n
+    TmBool b -> shows b
+    TmLe x y -> showParen (prec > 6) (printTerm pvar 7 x . showString " <= " . printTerm pvar 7 y)
+    TmAdd x y -> showParen (prec > 5) (printTerm pvar 6 x . showString " + " . printTerm pvar 6 y)
+    TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm pvar 11 x)
+    TmIte c x y -> showParen (prec > 3) $
+                   showString "if " . printTerm pvar 0 c .
+                   showString " then " . printTerm pvar 4 x .
+                   showString " else " . printTerm pvar 4 y
+    TmApp x y -> showParen (prec > 10) (printTerm pvar 10 x) . showString " " . printTerm pvar 11 y
+    TmFix nm tp x ->
+      let nm' = if Prelude.null nm then "v" else nm
+          vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
+      showParen (prec > 0) $
+        showString "μ " . vnm 0 .
+        showString " : " . showsPrec 0 tp .
+        showString ". " . printTerm (pvar :> Const vnm) 0 x
+    TmAbs nm tp x ->
+      let nm' = if Prelude.null nm then "v" else nm
+          vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
+      showParen (prec > 0) $
+        showString "λ " . vnm 0 .
+        showString " : " . showsPrec 0 tp .
+        showString ". " . printTerm (pvar :> Const vnm) 0 x
+    TmInl b x ->
+      showParen (prec > 0) $
+        showString "inl[" . shows b . showString "](" . printTerm pvar 0 x . showString ")"
+    TmInr a x ->
+      showParen (prec > 0) $
+        showString "inr[" . shows a . showString "](" . printTerm pvar 0 x . showString ")"
+    TmCase tgt lnm l rnm r ->
+      let lnm' = if Prelude.null lnm then "v" else lnm
+          lvnm _prec = showString lnm' . shows (sizeInt (size pvar))
+          rnm' = if Prelude.null rnm then "v" else rnm
+          rvnm _prec = showString rnm' . shows (sizeInt (size pvar))
+      in
+        showParen (prec > 0) $
+          showString "case " . printTerm pvar 0 tgt .
+          showString " { inl(" . lvnm 0 . showString ") ↦ " . printTerm (pvar :> Const lvnm) 0 l .
+          showString " ; " .
+          showString "inr(" . rvnm 0 . showString ") ↦ " . printTerm (pvar :> Const rvnm) 0 r .
+          showString "}"
 
 instance KnownContext γ => Show (Term γ τ) where
   showsPrec = printTerm (generate knownSize (\i -> Const (\_ -> shows (indexVal i))))
@@ -178,20 +210,29 @@ computeType ::
   Assignment TypeRepr γ ->
   Term γ τ ->
   TypeRepr τ
-computeType env tm = case tm of
-  TmVar i -> env!i
-  TmWeak x -> computeType (Ctx.init env) x
-  TmInt _ -> IntRepr
-  TmBool _ -> BoolRepr
-  TmLe _ _ -> BoolRepr
-  TmAdd _ _ -> IntRepr
-  TmNeg _ -> IntRepr
-  TmIte _ x _ -> computeType env x
-  TmApp x y ->
-    case computeType env x of ArrowRepr _ τ -> τ
-  TmAbs _ τ₁ x ->
-    let τ₂ = computeType (env :> τ₁) x in ArrowRepr τ₁ τ₂
-  TmFix _ τ _ -> τ
+computeType env tm =
+  case tm of
+    TmVar i -> env!i
+    TmWeak x -> computeType (Ctx.init env) x
+    TmInt _ -> IntRepr
+    TmBool _ -> BoolRepr
+    TmLe _ _ -> BoolRepr
+    TmAdd _ _ -> IntRepr
+    TmNeg _ -> IntRepr
+    TmIte _ x _ -> computeType env x
+    TmApp x y ->
+      case computeType env x of ArrowRepr _ τ -> τ
+    TmAbs _ τ₁ x ->
+      let τ₂ = computeType (env :> τ₁) x in ArrowRepr τ₁ τ₂
+    TmFix _ τ _ -> τ
+    TmInl b x ->
+      let a = computeType env x in SumRepr a b
+    TmInr a x ->
+      let b = computeType env x in SumRepr a b
+    TmCase tgt _ l _ r ->
+      case computeType env tgt of
+        SumRepr a b ->
+          computeType (extend env a) l
 
 -- | A generic representation of values.  A value for this calculus
 --   is either a basic value of one of the base types (Int or Bool)
@@ -204,11 +245,15 @@ computeType env tm = case tm of
 data Value (f :: Type -> *) (τ :: Type) :: * where
   VInt   :: Int -> Value f IntT
   VBool  :: Bool -> Value f BoolT
+  VInl   :: Value f a -> Value f (a :+: b)
+  VInr   :: Value f b -> Value f (a :+: b)
   VAbs   :: Assignment f γ -> TypeRepr τ₁ -> Term (γ ::> τ₁) τ₂ -> Value f (τ₁ :-> τ₂)
 
 instance ShowFC Value where
   showsPrecFC _sh _prec (VInt n) = shows n
   showsPrecFC _sh _prec (VBool b) = shows b
+  showsPrecFC sh _prec (VInl x) = showString "inl(" . showsPrecFC sh 0 x . showString ")"
+  showsPrecFC sh _prec (VInr x) = showString "inr(" . showsPrecFC sh 0 x . showString ")"
   showsPrecFC sh prec (VAbs env τ tm) =
      printTerm (fmapFC (\x -> Const (\p -> sh p x)) env) prec (TmAbs [] τ tm)
 instance ShowF f => ShowF (Value f)

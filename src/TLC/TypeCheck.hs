@@ -61,12 +61,16 @@ data Term where
   TmApp  :: Term -> Term -> Term
   TmAbs  :: String -> Type -> Term -> Term
   TmFix  :: String -> Type -> Term -> Term
+  TmInl  :: Type -> Term -> Term
+  TmInr  :: Type -> Term -> Term
+  TmCase :: Term -> String -> Term -> String -> Term -> Term
  deriving (Show, Read, Eq, Ord)
 
 data Type where
   IntT :: Type
   BoolT :: Type
   ArrowT :: Type -> Type -> Type
+  SumT :: Type -> Type -> Type
  deriving (Show, Read, Eq, Ord)
 
 -- | Translate the unannotated 'Type' terms from this module into
@@ -77,6 +81,9 @@ typeToRepr BoolT = Some AST.BoolRepr
 typeToRepr (ArrowT x y) =
   case (typeToRepr x, typeToRepr y) of
     (Some x', Some y') -> Some (AST.ArrowRepr x' y')
+typeToRepr (SumT a b) =
+  case (typeToRepr a, typeToRepr b) of
+    (Some a', Some b') -> Some (AST.SumRepr a' b')
 
 -- | The result of a typechecking operation in the context
 --   of free variable context @γ@ is a 'AST.TypeRepr' and
@@ -104,50 +111,64 @@ verifyTyping ::
    Assignment AST.TypeRepr γ {-^ Typed scope information corresponding to the above -} ->
    Term {-^ A term to check -} ->
    Except String (TCResult γ)
-verifyTyping scope env tm = case tm of
-   TmVar nm ->
-     case elemIndex nm scope of
-       Just i ->
-         case intIndex (length scope - 1 - i) (size env) of
-           Just (Some idx) -> return $ TCResult (env!idx) (AST.TmVar idx)
-           Nothing -> throwError $ unwords ["Unable to resolve variable:", nm]
-       Nothing -> throwError $ unwords ["Variable not in scope:", nm]
-   TmInt n ->
-     return $ TCResult AST.IntRepr (AST.TmInt n)
-   TmBool b ->
-     return $ TCResult AST.BoolRepr (AST.TmBool b)
-   TmLe x y ->
-     do TCResult AST.IntRepr x' <- verifyTyping scope env x
-        TCResult AST.IntRepr y' <- verifyTyping scope env y
-        return $ TCResult AST.BoolRepr (AST.TmLe x' y')
-   TmAdd x y ->
-     do TCResult AST.IntRepr x' <- verifyTyping scope env x
-        TCResult AST.IntRepr y' <- verifyTyping scope env y
-        return $ TCResult AST.IntRepr (AST.TmAdd x' y')
-   TmNeg x ->
-     do TCResult AST.IntRepr x' <- verifyTyping scope env x
-        return $ TCResult AST.IntRepr (AST.TmNeg x')
-   TmIte c x y ->
-     do TCResult AST.BoolRepr c' <- verifyTyping scope env c
-        TCResult xtp x' <- verifyTyping scope env x
-        TCResult ytp y' <- verifyTyping scope env y
-        Just Refl <- return $ testEquality xtp ytp
-        return $ TCResult xtp (AST.TmIte c' x' y')
-   TmApp x y ->
-     do TCResult (AST.ArrowRepr argTy outTy) x' <- verifyTyping scope env x
-        TCResult ytp y' <- verifyTyping scope env y
-        Just Refl <- return $ testEquality ytp argTy
-        return $ TCResult outTy (AST.TmApp x' y')
-   TmAbs nm tp x ->
-     do Some argTy <- return $ typeToRepr tp
-        TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
-        return $ TCResult (AST.ArrowRepr argTy xtp) (AST.TmAbs nm argTy x')
-   TmFix nm tp x ->
-     do Some argTy <- return $ typeToRepr tp
-        TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
-        Just Refl <- return $ testEquality argTy xtp
-        return $ TCResult xtp (AST.TmFix nm argTy x')
-
+verifyTyping scope env tm =
+  case tm of
+    TmVar nm ->
+      case elemIndex nm scope of
+        Just i ->
+          case intIndex (length scope - 1 - i) (size env) of
+            Just (Some idx) -> return $ TCResult (env!idx) (AST.TmVar idx)
+            Nothing -> throwError $ unwords ["Unable to resolve variable:", nm]
+        Nothing -> throwError $ unwords ["Variable not in scope:", nm]
+    TmInt n ->
+      return $ TCResult AST.IntRepr (AST.TmInt n)
+    TmBool b ->
+      return $ TCResult AST.BoolRepr (AST.TmBool b)
+    TmLe x y ->
+      do TCResult AST.IntRepr x' <- verifyTyping scope env x
+         TCResult AST.IntRepr y' <- verifyTyping scope env y
+         return $ TCResult AST.BoolRepr (AST.TmLe x' y')
+    TmAdd x y ->
+      do TCResult AST.IntRepr x' <- verifyTyping scope env x
+         TCResult AST.IntRepr y' <- verifyTyping scope env y
+         return $ TCResult AST.IntRepr (AST.TmAdd x' y')
+    TmNeg x ->
+      do TCResult AST.IntRepr x' <- verifyTyping scope env x
+         return $ TCResult AST.IntRepr (AST.TmNeg x')
+    TmIte c x y ->
+      do TCResult AST.BoolRepr c' <- verifyTyping scope env c
+         TCResult xtp x' <- verifyTyping scope env x
+         TCResult ytp y' <- verifyTyping scope env y
+         Just Refl <- return $ testEquality xtp ytp
+         return $ TCResult xtp (AST.TmIte c' x' y')
+    TmApp x y ->
+      do TCResult (AST.ArrowRepr argTy outTy) x' <- verifyTyping scope env x
+         TCResult ytp y' <- verifyTyping scope env y
+         Just Refl <- return $ testEquality ytp argTy
+         return $ TCResult outTy (AST.TmApp x' y')
+    TmAbs nm tp x ->
+      do Some argTy <- return $ typeToRepr tp
+         TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
+         return $ TCResult (AST.ArrowRepr argTy xtp) (AST.TmAbs nm argTy x')
+    TmFix nm tp x ->
+      do Some argTy <- return $ typeToRepr tp
+         TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
+         Just Refl <- return $ testEquality argTy xtp
+         return $ TCResult xtp (AST.TmFix nm argTy x')
+    TmInl b e ->
+      do Some rTy <- return $ typeToRepr b
+         TCResult lTy e' <- verifyTyping scope env e
+         return $ TCResult (AST.SumRepr lTy rTy) (AST.TmInl rTy e')
+    TmInr a e ->
+      do Some lTy <- return $ typeToRepr a
+         TCResult rTy e' <- verifyTyping scope env e
+         return $ TCResult (AST.SumRepr lTy rTy) (AST.TmInr lTy e')
+    TmCase tgt x l y r ->
+      do TCResult (AST.SumRepr a b) tgt' <- verifyTyping scope env tgt
+         TCResult c l' <- verifyTyping (x : scope) (extend env a) l
+         TCResult c' r' <- verifyTyping (y : scope) (extend env b) r
+         Just Refl <- return $ testEquality c c'
+         return $ TCResult c (AST.TmCase tgt' x l' y r')
  where
    fail msg = throwError $ unlines
                [ "Error during typechecking"
