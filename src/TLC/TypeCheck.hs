@@ -101,9 +101,7 @@ someDemo = Some (Int 5)
 -- >>> :module +Data.Parameterized.Some
 -- >>> :set -XGADTs
 -- >>> someDemo
--- Int 5
 -- >>> (case someDemo of { Some (Int x) -> intFun x }) :: String
--- "5"
 
 
 
