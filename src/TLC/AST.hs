@@ -140,30 +140,43 @@ instance TestEquality TypeRepr where
 -- • t gives the term's type
 
 data Term (ctx :: Ctx Type) (t :: Type) :: * where
+
+  -- Variables take a de Bruijn index
   TmVar  :: Index ctx t -> Term ctx t
+
+  -- Weakening is an explicit constructor
+  -- (a useful technique)
   TmWeak :: Term ctx t -> Term (ctx ::> t') t
+
+  -- Literals:
+  TmBool :: Bool -> Term ctx BoolT
   TmInt  :: Int -> Term ctx IntT
+
+  -- Arithmetic and comparisons
   TmLe   :: Term ctx IntT -> Term ctx IntT -> Term ctx BoolT
   TmAdd  :: Term ctx IntT -> Term ctx IntT -> Term ctx IntT
   TmNeg  :: Term ctx IntT -> Term ctx IntT
-  TmBool :: Bool -> Term ctx BoolT
-  TmIte  :: Term ctx BoolT -> Term ctx t -> Term ctx t -> Term ctx t
+
+  -- Conditionals
+  TmIte  :: Term ctx BoolT ->
+            Term ctx t ->
+            Term ctx t ->
+            Term ctx t
+  -- Functions
   TmApp  :: Term ctx (t1 :-> t2) ->
             Term ctx t1 ->
             Term ctx t2
   TmAbs  :: String -> TypeRepr t1 ->
             Term (ctx ::> t1) t2 ->
             Term ctx (t1 :-> t2)
+
+  -- Recursion
   TmFix  :: String -> TypeRepr t ->
             Term (ctx ::> t) t ->
             Term ctx t
 
 -- >>> :t TmAdd (TmInt 3) (TmInt 2)
--- TmAdd (TmInt 3) (TmInt 2) :: Term ctx 'IntT
 -- >>> :t TmAdd (TmInt 2) (TmVar 0)
--- TmAdd (TmInt 2) (TmVar 0)
---   :: Num (Data.Parameterized.Context.Unsafe.Index ctx 'IntT) =>
---      Term ctx 'IntT
 
 
 
