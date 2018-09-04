@@ -83,6 +83,7 @@ infixr 5 :->
 
 
 -- A singleton for run-time witnesses of STLC types
+
 data TypeRepr :: Type -> * where
   ArrowRepr :: TypeRepr t1 -> TypeRepr t2 -> TypeRepr (t1 :-> t2)
   BoolRepr  :: TypeRepr BoolT
@@ -101,13 +102,15 @@ instance Show (TypeRepr t) where
 instance ShowF TypeRepr
 
 
--- # Recovering a Witness for a Known Type
+-- # Recovering a Witness
+-- # for a Statically Known Type
 
 instance KnownRepr TypeRepr IntT where
   knownRepr = IntRepr
 
 instance KnownRepr TypeRepr BoolT where
   knownRepr = BoolRepr
+
 instance (KnownRepr TypeRepr t1, KnownRepr TypeRepr t2) =>
          KnownRepr TypeRepr (t1 :-> t2)
   where
@@ -145,9 +148,15 @@ data Term (ctx :: Ctx Type) (t :: Type) :: * where
   TmNeg  :: Term ctx IntT -> Term ctx IntT
   TmBool :: Bool -> Term ctx BoolT
   TmIte  :: Term ctx BoolT -> Term ctx t -> Term ctx t -> Term ctx t
-  TmApp  :: Term ctx (t1 :-> t2) -> Term ctx t1 -> Term ctx t2
-  TmAbs  :: String -> TypeRepr t1 -> Term (ctx ::> t1) t2 -> Term ctx (t1 :-> t2)
-  TmFix  :: String -> TypeRepr t  -> Term (ctx ::> t)  t  -> Term ctx t
+  TmApp  :: Term ctx (t1 :-> t2) ->
+            Term ctx t1 ->
+            Term ctx t2
+  TmAbs  :: String -> TypeRepr t1 ->
+            Term (ctx ::> t1) t2 ->
+            Term ctx (t1 :-> t2)
+  TmFix  :: String -> TypeRepr t ->
+            Term (ctx ::> t) t ->
+            Term ctx t
 
 -- >>> :t TmAdd (TmInt 3) (TmInt 2)
 -- TmAdd (TmInt 3) (TmInt 2) :: Term ctx 'IntT
@@ -206,6 +215,7 @@ pattern x :<= y = TmLe x y
 
 
 -- # Printing Expressions
+
 printTerm :: Assignment (Const (Int -> ShowS)) ctx
           -> Int
           -> Term ctx t
@@ -216,14 +226,23 @@ printTerm pvar prec tm =
     TmWeak x -> printTerm (Ctx.init pvar) prec x
     TmInt n -> shows n
     TmBool b -> shows b
-    TmLe x y -> showParen (prec > 6) (printTerm pvar 7 x . showString " <= " . printTerm pvar 7 y)
-    TmAdd x y -> showParen (prec > 5) (printTerm pvar 6 x . showString " + " . printTerm pvar 6 y)
-    TmNeg x -> showParen (prec > 10) (showString "negate " . printTerm pvar 11 x)
-    TmIte c x y -> showParen (prec > 3) $
-                   showString "if " . printTerm pvar 0 c .
-                   showString " then " . printTerm pvar 4 x .
-                   showString " else " . printTerm pvar 4 y
-    TmApp x y -> showParen (prec > 10) (printTerm pvar 10 x) . showString " " . printTerm pvar 11 y
+    TmLe x y ->
+      showParen (prec > 6) $
+      printTerm pvar 7 x . showString " <= " . printTerm pvar 7 y
+    TmAdd x y ->
+      showParen (prec > 5) $
+      printTerm pvar 6 x . showString " + " . printTerm pvar 6 y
+    TmNeg x ->
+      showParen (prec > 10) $
+      showString "negate " . printTerm pvar 11 x
+    TmIte c x y ->
+      showParen (prec > 3) $
+      showString "if " . printTerm pvar 0 c .
+      showString " then " . printTerm pvar 4 x .
+      showString " else " . printTerm pvar 4 y
+    TmApp x y ->
+      showParen (prec > 10) $
+      printTerm pvar 10 x . showString " " . printTerm pvar 11 y
     TmFix nm tp x ->
       let nm' = if Prelude.null nm then "v" else nm
           vnm _prec = showString nm' . shows (sizeInt (size pvar)) in
@@ -248,7 +267,11 @@ printTerm pvar prec tm =
 -- # Showing Terms
 
 instance KnownContext ctx => Show (Term ctx t) where
-  showsPrec = printTerm (generate knownSize (\i -> Const (\_ -> shows (indexVal i))))
+  showsPrec =
+    printTerm $
+    generate knownSize $
+    \i ->
+      Const (\_ -> shows (indexVal i))
 
 
 -- # Computing Types
@@ -257,20 +280,21 @@ computeType ::
   Assignment TypeRepr ctx ->
   Term ctx t ->
   TypeRepr t
-computeType env tm = case tm of
-  TmVar i -> env!i
-  TmWeak x -> computeType (Ctx.init env) x
-  TmInt _ -> IntRepr
-  TmBool _ -> BoolRepr
-  TmLe _ _ -> BoolRepr
-  TmAdd _ _ -> IntRepr
-  TmNeg _ -> IntRepr
-  TmIte _ x _ -> computeType env x
-  TmApp x y ->
-    case computeType env x of ArrowRepr _ t -> t
-  TmAbs _ t1 x ->
-    let t2 = computeType (env :> t1) x in ArrowRepr t1 t2
-  TmFix _ t _ -> t
+computeType env (TmVar i) = env ! i
+computeType env (TmWeak x) = computeType (Ctx.init env) x
+computeType env (TmInt _) = IntRepr
+computeType env (TmBool _) = BoolRepr
+computeType env (TmLe _ _) = BoolRepr
+computeType env (TmAdd _ _) = IntRepr
+computeType env (TmNeg _) = IntRepr
+computeType env (TmIte _ x _) = computeType env x
+computeType env (TmApp x y) =
+  case computeType env x of
+    ArrowRepr _ t -> t
+computeType env (TmAbs _ t1 x) =
+  let t2 = computeType (env :> t1) x
+  in ArrowRepr t1 t2
+computeType env (TmFix _ t _) = t
 
 
 -- # Values
@@ -291,10 +315,14 @@ instance ShowFC Value where
   showsPrecFC _sh _prec (VInt n) = shows n
   showsPrecFC _sh _prec (VBool b) = shows b
   showsPrecFC sh prec (VAbs env t tm) =
-     printTerm (fmapFC (\x -> Const (\p -> sh p x)) env) prec (TmAbs [] t tm)
+     printTerm (fmapFC (\x -> Const (\p -> sh p x)) env)
+       prec
+       (TmAbs [] t tm)
 instance ShowF f => ShowF (Value f)
 instance ShowF f => Show (Value f t) where
   show = showFC showF
+
+-- {{{Next: Type Checker|||(lambda (_) (find-file "TypeCheck.hs"))}}}
 
 
 

@@ -34,9 +34,18 @@
 -- term from untyped input data.
 -------------------------------------------------------------------
 -- {show}
+
+-- # The Type Checker
+
+
+-- This module implements a type checker. It must prove to the
+-- compiler that it produces only well-typed expressions.
+
+
 module TLC.TypeCheck where
 
 
+-- # Imports
 
 import Prelude
 import Control.Monad.Except
@@ -269,6 +278,11 @@ factBody = TmIte (TmLe (TmVar "x") (TmInt 1))
 fact = TmFix "fact" (ArrowT IntT IntT) (TmAbs "x" IntT factBody)
 
 -- >>> checkTerm fact
+
+
+-- {{{Next: Evaluator|||(lambda (_) (find-file "TypeCheck.hs"))}}}
+
+
 
 
 -- {hide}

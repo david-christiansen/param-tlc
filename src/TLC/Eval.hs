@@ -82,7 +82,7 @@ cbvEval ::
 
 -- # CBV: Variables and Literals
 
-cbvEval env (TmVar i) = unCBV (env!i)
+cbvEval env (TmVar i) = unCBV (env ! i)
 cbvEval env (TmWeak x) = cbvEval (Ctx.init env) x
 cbvEval env (TmBool b) = VBool b
 cbvEval env (TmInt n) = VInt n
