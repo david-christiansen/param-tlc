@@ -91,12 +91,15 @@ cbvEval env (TmInt n) = VInt n
 -- # CBV: Comparisons and Arithmetic
 
 -- GHC knows that there are no other value possibilities.
+
 cbvEval env (TmLe x y) =
   case (cbvEval env x, cbvEval env y) of
     (VInt a, VInt b) -> VBool $! a <= b
+
 cbvEval env (TmAdd x y) =
   case (cbvEval env x, cbvEval env y) of
     (VInt a, VInt b) -> VInt $! a + b
+
 cbvEval env (TmNeg x) =
   case cbvEval env x of
     VInt a -> VInt $! negate a
@@ -274,7 +277,7 @@ subst sz sub (TmInt n) = TmInt n
 
 
 -- # Performing Substitution:
--- ## Comparisons and Arithmetic and Conditionals
+-- ## Comparisons, Arithmetic and Conditionals
 
 subst sz sub (TmLe x y) =
   TmLe (subst sz sub x) (subst sz sub y)
@@ -290,10 +293,13 @@ subst sz sub (TmIte c x y) =
 
 
 -- # Performing Substitution: Functions
+
 subst sz sub (TmApp x y) =
   TmApp (subst sz sub x) (subst sz sub y)
+
 subst sz sub (TmAbs nm t x) =
   TmAbs nm t (subst (incSize sz) (extend_sub sz sub) x)
+
 subst sz sub (TmFix nm t x) =
   TmFix nm t (subst (incSize sz) (extend_sub sz sub) x)
 
@@ -375,10 +381,13 @@ substEval sz (TmIte c x y) =
 -- # Full β: Functions
 
 -- For functions, reduce under λ
+
 substEval sz (TmAbs nm t x) =
   TmAbs nm t (substEval (incSize sz) x)
 
+
 -- Application works like other elimination forms
+
 substEval sz (TmApp x y) =
   case substEval sz x of
     TmAbs _ _ body -> substEval sz (singleSubst sz y body)

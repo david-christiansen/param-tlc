@@ -139,7 +139,6 @@ attempt =
   where fail msg = Left msg
 
 -- >>> attempt
--- Left "Pattern match failure in do expression at /tmp/dantedaw47o.hs:130:6-12"
 
 
 -- # The Type Checker
@@ -165,7 +164,7 @@ verifyTyping scope env tm =
         Just i ->
           case intIndex (length scope - 1 - i) (size env) of
             Just (Some idx) ->
-              return $ TCResult (env!idx) (AST.TmVar idx)
+              return $ TCResult (env ! idx) (AST.TmVar idx)
             Nothing ->
               throwError $
               unwords ["Unable to resolve variable:", nm]
