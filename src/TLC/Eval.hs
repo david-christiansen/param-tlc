@@ -126,7 +126,7 @@ cbvEval env (TmApp x y) =
 -- # CBV: Recursion
 
 cbvEval env (TmFix _ _ x) =
-      fix $ \x' -> cbvEval (env :> CBV x') x
+  fix $ \x' -> cbvEval (env :> CBV x') x
 
 
 -- # Call-by-Need Evaluation
@@ -178,6 +178,7 @@ cbnEval ::
 
 
 -- # CBN: Variables and Literals
+
 cbnEval env (TmVar i) = force (env ! i)
 cbnEval env (TmWeak x) = cbnEval (Ctx.init env) x
 cbnEval env (TmBool b) = return $ VBool b
@@ -185,6 +186,7 @@ cbnEval env (TmInt n) = return $ VInt n
 
 
 -- # CBN: Comparisons and Arithmetic
+
 cbnEval env (TmLe x y) =
   do VInt a <- cbnEval env x
      VInt b <- cbnEval env y
@@ -225,15 +227,20 @@ cbnEval env (TmFix _ _ x) =
 
 
 
--- # Substitution and full-β evaluation
+-- # Substitution and Full-β Evaluation
 
--- | A @Subst@ assigns to each free variable in @ctx2@
---   a term with free variables in @ctx1@.
+-- Each free variable in ctx2 is given a term that has
+-- variables in ctx1
+
 type Subst ctx1 ctx2  = Assignment (Term ctx1) ctx2
 
--- | This is a utility operation that extends a
---   substitution with a fresh variable that will
---   be unchanged.
+
+-- # Extending Substitutions
+
+-- Extends a substitution with a fresh variable that will
+-- be unchanged. The size of the context allows the variable
+-- to map to its own de Bruijn index.
+
 extend_sub ::
   Size ctx1 ->
   Subst ctx1 ctx2 ->
@@ -241,68 +248,175 @@ extend_sub ::
 extend_sub sz sub =
   fmapFC TmWeak sub :> TmVar (nextIndex sz)
 
--- | Given a substition and a term, apply the substituion to
---   all the free variables in the term.
+
+-- # Performing Substitution
+
+-- Apply a substitution to each free variable in a term
+
 subst ::
+  -- The size of the context is needed for
+  -- extending it under λ
   Size ctx1 ->
   Subst ctx1 ctx2 ->
-  Term ctx2 t -> Term ctx1 t
-subst sz sub tm = case tm of
-  TmVar i     -> sub ! i
-  TmWeak x    -> subst sz (Ctx.init sub) x
-  TmBool b    -> TmBool b
-  TmInt n     -> TmInt n
-  TmLe x y    -> TmLe (subst sz sub x) (subst sz sub y)
-  TmAdd x y   -> TmAdd (subst sz sub x) (subst sz sub y)
-  TmNeg x     -> TmNeg (subst sz sub x)
-  TmIte c x y -> TmIte (subst sz sub c) (subst sz sub x) (subst sz sub y)
-  TmApp x y   -> TmApp (subst sz sub x) (subst sz sub y)
-  TmAbs nm t x -> TmAbs nm t (subst (incSize sz) (extend_sub sz sub) x)
-  TmFix nm t x -> TmFix nm t (subst (incSize sz) (extend_sub sz sub) x)
+  Term ctx2 t ->
+  Term ctx1 t
 
--- | Substitute a term for a single open variable, leaving all other
---   variables unchanged.
+
+-- # Performing Substitution: Variables and Literals
+
+subst sz sub (TmVar i) = sub ! i
+
+subst sz sub (TmWeak x) = subst sz (Ctx.init sub) x
+
+subst sz sub (TmBool b) = TmBool b
+
+subst sz sub (TmInt n) = TmInt n
+
+
+-- # Performing Substitution:
+-- ## Comparisons and Arithmetic and Conditionals
+
+subst sz sub (TmLe x y) =
+  TmLe (subst sz sub x) (subst sz sub y)
+
+subst sz sub (TmAdd x y) =
+  TmAdd (subst sz sub x) (subst sz sub y)
+
+subst sz sub (TmNeg x) =
+  TmNeg (subst sz sub x)
+
+subst sz sub (TmIte c x y) =
+  TmIte (subst sz sub c) (subst sz sub x) (subst sz sub y)
+
+
+-- # Performing Substitution: Functions
+subst sz sub (TmApp x y) =
+  TmApp (subst sz sub x) (subst sz sub y)
+subst sz sub (TmAbs nm t x) =
+  TmAbs nm t (subst (incSize sz) (extend_sub sz sub) x)
+subst sz sub (TmFix nm t x) =
+  TmFix nm t (subst (incSize sz) (extend_sub sz sub) x)
+
+
+-- # Single Substitutions
+
+-- Leave all but one variable unchanged by creating a
+-- substitution that maps other variables to themselves.
+
 singleSubst ::
   Size ctx ->
-  Term ctx t          {- ^ The term to substitute -} ->
-  Term (ctx ::> t) t' {- ^ The term being substituted into -} ->
+  -- The term to substitute:
+  Term ctx t ->
+  -- The term into which substitution occurs:
+  Term (ctx ::> t) t' ->
+  -- The result has the same type
   Term ctx t'
-singleSubst sz tm body = subst sz (generate sz TmVar :> tm) body
 
--- | Perform full-β normalization on a λ term.
-substEval :: Size ctx -> Term ctx t -> Term ctx t
-substEval sz tm = case tm of
-  TmVar i  -> TmVar i
-  TmWeak x -> TmWeak (substEval (decSize sz) x)
-  TmBool x -> TmBool x
-  TmInt n  -> TmInt n
-  TmLe x y ->
-     case (substEval sz x, substEval sz y) of
-       (TmInt a, TmInt b) -> TmBool $! a <= b
-       (x',y') -> TmLe x' y'
-  TmNeg x ->
-     case substEval sz x of
-       TmInt a -> TmInt $! negate a
-       x' -> TmNeg x'
-  TmAdd x y ->
-     case (substEval sz x, substEval sz y) of
-       (TmInt a, TmInt b) -> TmInt $! a + b
-       (x',y') -> TmAdd x' y'
-  TmAbs nm t x  -> TmAbs nm t (substEval (incSize sz) x)
-  TmIte c x y ->
-     case substEval sz c of
-       TmBool True  -> substEval sz x
-       TmBool False -> substEval sz y
-       c' -> TmIte c' x y
-  TmApp x y ->
-     case substEval sz x of
-       TmAbs _ _ body -> substEval sz (singleSubst sz y body)
-       x' -> TmApp x' y
-  TmFix _ _ x ->
+singleSubst sz tm body =
+  subst sz (generate sz TmVar :> tm) body
+
+
+-- # Full β Normalization
+
+substEval ::
+  -- Given the largest index into the context
+  Size ctx ->
+  -- And a term in that context
+  Term ctx t ->
+  -- Return a term in that context with the same type
+  Term ctx t
+
+
+-- # Full β: Variables and Literals
+
+-- Leave them alone!
+
+substEval sz (TmVar i) =
+  TmVar i
+substEval sz (TmWeak x) =
+  TmWeak (substEval (decSize sz) x)
+substEval sz (TmBool x) =
+  TmBool x
+substEval sz (TmInt n) =
+  TmInt n
+
+
+
+-- # Full β: Comparisons and Arithmetic
+
+-- For elimination forms, check whether the normalized arguments are
+-- canonical, and if so, perform a contraction step.
+
+substEval sz (TmLe x y) =
+  case (substEval sz x, substEval sz y) of
+    (TmInt a, TmInt b) -> TmBool $! a <= b
+    (x',y') -> TmLe x' y'
+
+substEval sz (TmNeg x) =
+  case substEval sz x of
+    TmInt a -> TmInt $! negate a
+    x' -> TmNeg x'
+
+substEval sz (TmAdd x y) =
+  case (substEval sz x, substEval sz y) of
+    (TmInt a, TmInt b) -> TmInt $! a + b
+    (x',y') -> TmAdd x' y'
+
+
+-- # Full β: Conditionals
+
+substEval sz (TmIte c x y) =
+  case substEval sz c of
+    TmBool True  -> substEval sz x
+    TmBool False -> substEval sz y
+    c' -> TmIte c' x y
+
+
+-- # Full β: Functions
+
+-- For functions, reduce under λ
+substEval sz (TmAbs nm t x) =
+  TmAbs nm t (substEval (incSize sz) x)
+
+-- Application works like other elimination forms
+substEval sz (TmApp x y) =
+  case substEval sz x of
+    TmAbs _ _ body -> substEval sz (singleSubst sz y body)
+    x' -> TmApp x' y
+
+
+-- # Full β: Recursion
+
+-- The recursion is represented explicitly.
+
+substEval sz tm@(TmFix _ _ x) =
      substEval sz (singleSubst sz tm x)
 
+
+
+-- # Exercises:
+
+-- 0. Add binary sum and product types, with their associated
+--    introduction and elimination forms
+
+-- 1. Add n-ary sums and products, using a Ctx for their components
+--    and an Assignment in their value forms.
+
+-- 2. Implement another evaluation strategy, such as call-by-name
 
 
+
+-- ## The Future
+
+-- Feel free to send exercise questions to:
+-- • dtc@galois.com
+-- • jmct@galois.com
+
+-- ## Curious about Galois?
+
+-- Check out lifeatgalois.com to see how we work.
+
+
 
 -- {hide}
 -- Local Variables:

@@ -1,3 +1,4 @@
+-- {hide}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -18,7 +19,7 @@
 
 {-# OPTIONS_GHC -Werror #-}
 {-# OPTIONS -Wincomplete-patterns #-}
-{-# OPTIONS -Wunused-imports #-}
+{-# OPTIONS -Wno-unused-imports #-}
 
 ----------------------------------------------------------------
 -- |
@@ -32,7 +33,10 @@
 -- types sufficent to convince GHC that we can produce a strongly-typed
 -- term from untyped input data.
 -------------------------------------------------------------------
+-- {show}
 module TLC.TypeCheck where
+
+
 
 import Prelude
 import Control.Monad.Except
@@ -40,16 +44,16 @@ import Control.Monad.Except
 import Data.List
 import Data.Type.Equality
 
+import Data.Parameterized.Classes
 import Data.Parameterized.Context
 import Data.Parameterized.Some
 
+
 import qualified TLC.AST as AST
 
--- | An untyped term AST that closed follows the strongly-typed
---   AST from "TLC.AST", but has no GADT information.
---
---   To produce well-typed terms we must check a candidate term
---   to ensure it follows proper scope and typing rules.
+
+-- # Input to the Type Checker
+
 data Term where
   TmVar  :: String -> Term
   TmInt  :: Int -> Term
@@ -69,8 +73,33 @@ data Type where
   ArrowT :: Type -> Type -> Type
  deriving (Show, Read, Eq, Ord)
 
--- | Translate the unannotated 'Type' terms from this module into
---   the corresponding 'AST.TypeRepr' values from the "TLC.AST" module.
+
+-- # Existential Types
+
+data Inty (a :: *) :: * where
+  Int :: Int -> Inty Int
+  Integer :: Integer -> Inty Integer
+
+intFun :: Int -> String
+intFun = show
+
+deriving instance Show (Inty a)
+instance ShowF Inty
+
+someDemo :: Some Inty
+someDemo = Some (Int 5)
+
+-- >>> :module +Data.Parameterized.Some
+-- >>> :set -XGADTs
+-- >>> someDemo
+-- Int 5
+-- >>> (case someDemo of { Some (Int x) -> intFun x }) :: String
+-- "5"
+
+
+
+-- # From Types to TypeReprs
+
 typeToRepr :: Type -> Some AST.TypeRepr
 typeToRepr IntT = Some AST.IntRepr
 typeToRepr BoolT = Some AST.BoolRepr
@@ -78,75 +107,145 @@ typeToRepr (ArrowT x y) =
   case (typeToRepr x, typeToRepr y) of
     (Some x', Some y') -> Some (AST.ArrowRepr x' y')
 
--- | The result of a typechecking operation in the context
---   of free variable context @ctx@ is a 'AST.TypeRepr' and
---   a term of that type.
+
+-- # The Result of Type Checking
+
+-- The result of type checking in some context is a type
+-- and a term with that type.
+
 data TCResult (ctx :: Ctx AST.Type) where
   TCResult :: AST.TypeRepr t -> AST.Term ctx t -> TCResult ctx
 
--- | Given an untyped list of free variable names and a
---   strongly-typed free variable context, check that the
---   given term is well typed, and, if so, compute what type
---   it has (or report an error).
---
---   The @testEquality@ function is used to reify equality tests
---   on types into the GHC type system.  Pattern matching on @Refl@
---   brings type-level equalities into scope in GHC's type system,
---   and allows the construction of strongly-typed ASTs.  Using
---   the @Except@ monad and monad pattern bindings, we can have
---   GHC automatically generate error messages if an expected
---   type equality doesn't hold.  This isn't really recommended for
---   production code as the generated messages are not very user-friendly,
---   but is convenient and fairly readable for demonstration purposes here.
+deriving instance KnownContext ctx => Show (TCResult ctx)
+
+
+-- # An Aside: Rebindable Syntax
+
+-- Rebindable syntax allows local bindings to be used for
+-- desugaring. The type checker rebinds "fail" to capture
+-- GHC pattern match failure errors.
+
+attempt :: Either String ()
+attempt =
+  do Nothing <- return $ Just 3
+     return ()
+  where fail msg = Left msg
+
+-- >>> attempt
+-- Left "Pattern match failure in do expression at /tmp/dantedaw47o.hs:130:6-12"
+
+
+-- # The Type Checker
 
 verifyTyping ::
-   [String] {-^ Scope information about the free variable names in stack order (nearest enclosing binder nearest to the front of the list) -} ->
-   Assignment AST.TypeRepr ctx {-^ Typed scope information corresponding to the above -} ->
-   Term {-^ A term to check -} ->
-   Except String (TCResult ctx)
-verifyTyping scope env tm = case tm of
-   TmVar nm ->
-     case elemIndex nm scope of
-       Just i ->
-         case intIndex (length scope - 1 - i) (size env) of
-           Just (Some idx) -> return $ TCResult (env!idx) (AST.TmVar idx)
-           Nothing -> throwError $ unwords ["Unable to resolve variable:", nm]
-       Nothing -> throwError $ unwords ["Variable not in scope:", nm]
-   TmInt n ->
-     return $ TCResult AST.IntRepr (AST.TmInt n)
-   TmBool b ->
-     return $ TCResult AST.BoolRepr (AST.TmBool b)
-   TmLe x y ->
-     do TCResult AST.IntRepr x' <- verifyTyping scope env x
-        TCResult AST.IntRepr y' <- verifyTyping scope env y
-        return $ TCResult AST.BoolRepr (AST.TmLe x' y')
-   TmAdd x y ->
-     do TCResult AST.IntRepr x' <- verifyTyping scope env x
-        TCResult AST.IntRepr y' <- verifyTyping scope env y
-        return $ TCResult AST.IntRepr (AST.TmAdd x' y')
-   TmNeg x ->
-     do TCResult AST.IntRepr x' <- verifyTyping scope env x
-        return $ TCResult AST.IntRepr (AST.TmNeg x')
-   TmIte c x y ->
-     do TCResult AST.BoolRepr c' <- verifyTyping scope env c
-        TCResult xtp x' <- verifyTyping scope env x
-        TCResult ytp y' <- verifyTyping scope env y
-        Just Refl <- return $ testEquality xtp ytp
-        return $ TCResult xtp (AST.TmIte c' x' y')
-   TmApp x y ->
-     do TCResult (AST.ArrowRepr argTy outTy) x' <- verifyTyping scope env x
-        TCResult ytp y' <- verifyTyping scope env y
-        Just Refl <- return $ testEquality ytp argTy
-        return $ TCResult outTy (AST.TmApp x' y')
-   TmAbs nm tp x ->
-     do Some argTy <- return $ typeToRepr tp
-        TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
-        return $ TCResult (AST.ArrowRepr argTy xtp) (AST.TmAbs nm argTy x')
-   TmFix nm tp x ->
-     do Some argTy <- return $ typeToRepr tp
-        TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
-        Just Refl <- return $ testEquality argTy xtp
-        return $ TCResult xtp (AST.TmFix nm argTy x')
+  -- Given a stack of free variable names,
+  [String] ->
+  -- the type of each name,
+  Assignment AST.TypeRepr ctx ->
+  -- and a term to check,
+  Term ->
+  -- either return an error or a type checking result.
+  Except String (TCResult ctx)
+
+verifyTyping scope env tm =
+  case tm of
+
+
+-- # The Type Checker: Variables
+
+    TmVar nm ->
+      case elemIndex nm scope of
+        Just i ->
+          case intIndex (length scope - 1 - i) (size env) of
+            Just (Some idx) ->
+              return $ TCResult (env!idx) (AST.TmVar idx)
+            Nothing ->
+              throwError $
+              unwords ["Unable to resolve variable:", nm]
+        Nothing ->
+          throwError $
+          unwords ["Variable not in scope:", nm]
+
+
+-- # The Type Checker: Literals
+
+    TmInt n ->
+      return $ TCResult AST.IntRepr (AST.TmInt n)
+
+-- >>> verifyTyping [] empty $ TmInt 8
+
+    TmBool b ->
+      return $ TCResult AST.BoolRepr (AST.TmBool b)
+
+-- >>> verifyTyping [] empty $ TmBool False
+
+
+-- # The Type Checker: Comparisons and Arithmetic
+
+    TmLe x y ->
+      do TCResult AST.IntRepr x' <- verifyTyping scope env x
+         TCResult AST.IntRepr y' <- verifyTyping scope env y
+         return $ TCResult AST.BoolRepr (AST.TmLe x' y')
+
+-- >>> verifyTyping [] empty $ TmLe (TmInt 3) (TmInt 2)
+-- >>> verifyTyping [] empty $ TmLe (TmInt 3) (TmBool False)
+
+    TmAdd x y ->
+      do TCResult AST.IntRepr x' <- verifyTyping scope env x
+         TCResult AST.IntRepr y' <- verifyTyping scope env y
+         return $ TCResult AST.IntRepr (AST.TmAdd x' y')
+
+    TmNeg x ->
+      do TCResult AST.IntRepr x' <- verifyTyping scope env x
+         return $ TCResult AST.IntRepr (AST.TmNeg x')
+
+
+-- # The Type Checker: Conditionals
+
+-- testEquality is used to convince the type checker that
+-- both xtp and ytp are in fact the same type.
+
+    TmIte c x y ->
+      do TCResult AST.BoolRepr c' <- verifyTyping scope env c
+         TCResult xtp x' <- verifyTyping scope env x
+         TCResult ytp y' <- verifyTyping scope env y
+         Just Refl <- return $ testEquality xtp ytp
+         return $ TCResult xtp (AST.TmIte c' x' y')
+
+-- >>> verifyTyping [] empty $ TmIte (TmBool False) (TmInt 2) (TmInt 3)
+-- >>> verifyTyping [] empty $ TmIte (TmBool False) (TmInt 2) (TmBool True)
+
+
+
+-- # The Type Checker: Functions
+
+    TmAbs nm tp x ->
+      do Some argTy
+           <- return $ typeToRepr tp
+         TCResult xtp x'
+           <- verifyTyping (nm:scope) (env :> argTy) x
+         return $
+           TCResult (AST.ArrowRepr argTy xtp)
+                    (AST.TmAbs nm argTy x')
+
+
+    TmApp rator rand ->
+      do TCResult (AST.ArrowRepr argTy outTy) rator'
+           <- verifyTyping scope env rator
+         TCResult rtp rand'
+           <- verifyTyping scope env rand
+         Just Refl <- return $ testEquality rtp argTy
+         return $ TCResult outTy (AST.TmApp rator' rand')
+
+
+
+-- # The Type Checker: Recursion
+
+    TmFix nm tp x ->
+      do Some argTy <- return $ typeToRepr tp
+         TCResult xtp x' <- verifyTyping (nm:scope) (env :> argTy) x
+         Just Refl <- return $ testEquality argTy xtp
+         return $ TCResult xtp (AST.TmFix nm argTy x')
 
  where
    fail msg = throwError $ unlines
@@ -154,7 +253,44 @@ verifyTyping scope env tm = case tm of
                , show tm
                , msg
                ]
+
+-- # Running the Type Checker
 
--- | Typecheck a term in the empty typing context.
+-- Check a type in the empty context
 checkTerm :: Term -> Except String (TCResult EmptyCtx)
 checkTerm = verifyTyping [] Empty
+
+
+factBody = TmIte (TmLe (TmVar "x") (TmInt 1))
+                 (TmInt 1)
+                 (TmApp (TmVar "fact")
+                        (TmAdd (TmVar "x") (TmInt (-1))))
+
+fact = TmFix "fact" (ArrowT IntT IntT) (TmAbs "x" IntT factBody)
+
+-- >>> checkTerm fact
+
+
+-- {hide}
+-- Local Variables:
+-- eval: (eldoc-mode -1)
+-- eval: (display-line-numbers-mode -1)
+-- eval: (flycheck-mode 1)
+-- eval: (make-variable-buffer-local 'face-remapping-alist)
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-title-face (:height 2.0
+--                                                                        :slant normal
+--                                                                        :foreground "black" :family "Overpass Heavy" :weight bold)))
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-subtitle-face (:height 1.5
+--                                                                           :slant normal
+--                                                                           :foreground "black" :family "Overpass Heavy" :weight semibold)))
+-- eval: (add-to-list 'face-remapping-alist '(live-code-talks-subsubtitle-face (:height 1.3
+--                                                                              :slant normal
+--                                                                              :foreground "black" :family "Overpass Heavy")))
+-- eval: (add-to-list 'face-remapping-alist
+--                    '(live-code-talks-comment-face (:slant normal
+--                                                    :foreground "black"
+--                                                    :family "Overpass")))
+-- eval: (add-to-list 'face-remapping-alist
+--                    '(idris-loaded-region-face (:background nil)))
+-- End:
+-- {show}
