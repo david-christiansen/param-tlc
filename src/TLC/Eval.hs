@@ -265,7 +265,8 @@ subst ::
   Term ctx1 t
 
 
--- # Performing Substitution: Variables and Literals
+-- # Performing Substitution:
+-- ## Variables and Literals
 
 subst sz sub (TmVar i) = sub ! i
 
